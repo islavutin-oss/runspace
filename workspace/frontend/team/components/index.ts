@@ -1,0 +1,7 @@
+export { default as Sidebar, type SidebarConfig, type ChannelConfig, type AgentConfig } from './Sidebar'
+export { default as ResizeHandle } from './ResizeHandle'
+export { default as ModeSwitcher, type WorkspaceMode } from './ModeSwitcher'
+export { default as DashboardPanel, type DashboardSpec, type DashboardMessage } from './DashboardPanel'
+export { default as Kanban, type KanbanStage } from './Kanban'
+export { default as ThreadPanel } from './ThreadPanel'
+export { default as KnowledgeBrowser, type KBGroup, type KBItem } from './KnowledgeBrowser'

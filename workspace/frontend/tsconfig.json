@@ -1,0 +1,21 @@
+// Typecheck the shared components:  cd workspace/frontend && npm ci && npm run typecheck
+// Runs in CI against the committed lockfile, so the resolved type versions are
+// the ones this was verified against rather than whatever floats to latest.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowJs": false,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["shared/**/*.ts", "shared/**/*.tsx", "team/**/*.ts", "team/**/*.tsx", "dialog/**/*.ts", "dialog/**/*.tsx"],
+  "exclude": ["node_modules", "**/*.test.*"]
+}

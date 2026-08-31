@@ -1,0 +1,10 @@
+{
+  "supplier": "Acme Test Suppliers Ltd",
+  "invoice_no": "TEST-001",
+  "invoice_date": "2026-04-30",
+  "due_date": "2026-05-14",
+  "total_amount": "100.00",
+  "currency": "EUR",
+  "iban": "TEST00000000123456789",
+  "swift": "TESTBANK"
+}

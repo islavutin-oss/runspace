@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+.env
+node_modules/
+.pytest_cache/
+
+# Runtime artifacts
+sessions/
+sessions.jsonl
+usage.jsonl
+.agentino/
+.docs/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+*.so
+*.c
+!setup.c
+agentino_pkg/
+
+# Large repos cloned by agents
+
+# Local scratch / experiments — not part of the shared package.
+_tmp/
+vscode-extension/
+
+# Tooling caches
+.venv/
+.ruff_cache/
+.hypothesis/
+.runspace/

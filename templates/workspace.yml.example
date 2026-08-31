@@ -1,0 +1,28 @@
+# Runspace workspace — configuration
+# Each app is an agent that lives in the workspace.
+
+name: "My Workspace"
+
+apps:
+  assistant:
+    name: Assistant
+    role: General Assistant
+    avatar: "🤖"
+    color: "#6B7280"
+    group: default            # default | backoffice | customer
+    # Which runtime executes a turn. `agentino` runs in-process; the others
+    # shell out to a CLI you install, so runspace depends on none of them.
+    type: agentino            # agentino | codex | claude_code | pi | openclaw
+    soul: assistant/SOUL.md
+    tools: assistant/tools/
+    # model: gpt-5.4-codex    # optional override
+
+  # The same workspace, answered by a different runtime. Nothing else about
+  # the app, its channels or its history changes:
+  # reviewer:
+  #   name: Rev
+  #   role: Code reviewer
+  #   type: claude_code
+  #   soul: reviewer/SOUL.md
+
+routines: routines.yml        # path to routines config (optional)

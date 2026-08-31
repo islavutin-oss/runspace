@@ -1,0 +1,190 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "runspace"
+version = "0.2.8"
+description = "A workspace runtime for LLM agents: channels, scheduled routines, attachments and a UI, with the agent runtime swappable"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.10"
+authors = [{ name = "Iliya Slavutin" }]
+keywords = ["agent", "llm", "ai", "workspace", "chat", "channels", "fastapi", "agentic"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Framework :: AsyncIO",
+    "Typing :: Typed",
+]
+
+# Core dependencies - minimal set required for basic functionality
+dependencies = [
+    "pydantic>=2.0",
+    # protocols.config builds every adapter's settings on top of this
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    # contracts.scheduling parses cron expressions at import time
+    "croniter>=2.0",
+]
+
+[project.optional-dependencies]
+# Agent runtimes. Runspace routes a turn to whichever runtime an app declares
+# and does not require any particular one, so the framework is an extra rather
+# than a core dependency. Published as `agentino-framework`; the bare
+# `agentino` name on PyPI belongs to an unrelated project.
+agentino = ["agentino-framework>=1.1.1"]
+
+# Session backends
+redis = ["redis>=5.0"]
+
+# Supabase-backed Store, FileStorage and MessagingService
+supabase = ["supabase>=2.0"]
+
+# Just the ASGI server, for hosting the workspace standalone
+server = ["uvicorn>=0.30"]
+
+# Workspace (full-stack AI workspace)
+workspace = [
+    "fastapi>=0.109",
+    "uvicorn>=0.30",
+    "starlette>=0.38",
+    "python-multipart>=0.0.6",
+]
+
+# Document processing
+documents = [
+    "pypdf>=4.0",
+    "markdown>=3.5",
+    # `fitz` — used for page rasterisation and scanned-PDF detection
+    "pymupdf>=1.24",
+    # `PIL` — imported at module scope by the Codex vision backend, so without
+    # it that backend raises ModuleNotFoundError on import rather than
+    # degrading. It was previously declared in no extra at all.
+    "pillow>=10.0",
+]
+
+# The production Embeddings backend. Without this, EMBEDDINGS_BACKEND=openai
+# resolves to None and fails at call time rather than at configuration time.
+embeddings = ["openai>=1.0"]
+
+# Scheduler
+scheduler = ["apscheduler>=3.10"]
+
+# Crawler (for web scraping tools)
+crawler = [
+    "httpx>=0.27",
+    # Add playwright or similar if needed for JS-heavy sites
+]
+
+# All extras
+all = [
+    "runspace[agentino,redis,server,supabase,workspace,documents,embeddings,scheduler,crawler]"
+]
+
+# Development dependencies
+dev = [
+    # The suite exercises the workspace, the document helpers and the embeddings
+    # backend, so this has to bring them or it produces a checkout whose tests
+    # cannot collect. `supabase` is here because the mirror tests patch its
+    # client.
+    #
+    # Most of the suite drives the agentino runtime, so `[dev]` brings it.
+    # It could not before 2026-08-29 — agentino was not on PyPI and naming it
+    # here made the install fail outright, which left `pip install -e .[dev]`
+    # producing a checkout whose tests could not all run.
+    "runspace[agentino,workspace,server,documents,embeddings,supabase]",
+    # The document tools produce real xlsx/docx/pptx and the tests check
+    # their magic bytes, so the suite needs agentino's docgen libraries —
+    # the [agentino] extra alone installs the framework without them.
+    "agentino-framework[docgen]>=1.1.1",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    # The protocol suite is property-based.
+    "hypothesis>=6.0",
+    "ruff>=0.5",
+    # tomllib is 3.11+, and the project supports 3.10. Tests read
+    # pyproject.toml to check the docs against the packaging.
+    'tomli>=2.0; python_version < "3.11"',
+]
+
+[project.urls]
+Homepage = "https://github.com/islavutin-oss/runspace"
+Repository = "https://github.com/islavutin-oss/runspace"
+Documentation = "https://github.com/islavutin-oss/runspace/blob/main/README.md"
+
+[project.scripts]
+# `runspace init <id>` scaffolds a tenant; `runspace serve` runs the launcher.
+# This must point at a module inside the packaged `src/runspace` tree — an
+# earlier target lived outside it and shipped a console script that raised
+# ModuleNotFoundError on every invocation.
+runspace = "runspace.workspace.cli.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+# One import root. Everything ships as `runspace.*` so the distribution does
+# not claim generic top-level names like `protocols` or `workspace`. The
+# root-level shims of those names are development-time compatibility only and
+# are deliberately not packaged.
+packages = ["src/runspace"]
+# Tests are part of the repository, not of the installed distribution.
+exclude = ["**/tests", "**/tests/**", "**/conftest.py", "**/node_modules", "**/node_modules/**"]
+
+# The React UI ships inside the wheel so that a pip install is the whole
+# dependency — consumers copy it into node_modules/@runspace/ui rather than
+# symlinking a checkout, which keeps the UI pinned to the same version as the
+# Python side. It lives at workspace/frontend in the repo (outside src/, since
+# it is not Python) and must land under the single `runspace` import root.
+[tool.hatch.build.targets.wheel.force-include]
+"workspace/frontend" = "runspace/workspace/frontend"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.git",
+    "/.venv",
+    "**/__pycache__",
+    "*.pyc",
+    ".pytest_cache",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.format]
+# Prose is not code. ruff formats Python inside markdown fences, and its
+# output optimises for a source file, not for a reader: compact dict literals
+# in a request-body example explode into one key per line, and a two-argument
+# call splits across three. Documentation examples are written to be read in
+# the flow of a sentence, so the formatter does not own them.
+exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+# `ruff format` owns line width for code. E501 only ever fires on string
+# literals and docstrings the formatter cannot split, where wrapping would
+# change user-facing output or hurt readability.
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+# Every test location, so a bare `pytest` runs the whole suite. These used to
+# be split across two commands and the second was easy to skip, which let a
+# broken console-script entry point sit in pyproject unnoticed.
+testpaths = [
+    "tests",
+    "src/runspace/contracts",
+    "src/runspace/protocols",
+    "src/runspace/workspace/backend/tests",
+    "src/runspace/workspace/cli/tests",
+    "scripts/tests",
+]
+asyncio_mode = "auto"
