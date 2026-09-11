@@ -45,6 +45,16 @@ onward.
 
 ### Changed
 
+- The `claude_code` runtime relays each tool call as it starts. It used to
+  wait for the CLI to exit and then emit one event, so a turn that ran tools
+  for minutes produced nothing on `/chat/stream` until it was over — and an
+  idle-timeout anywhere between the browser and the API cut the reply off
+  before it arrived. `stream()` now yields `{"type": "tool_call"}` per tool
+  the moment the CLI reports it, then the final `response`. `chat()` is
+  unchanged in shape and shares the same code path.
+- A `tool_use` of `Bash` that runs a shell dispatcher (`./tools call <name>`)
+  is reported as `<name>`, in both the streamed `tool_call` and `tools_used`.
+
 - **Breaking: one import root.** The packages moved under `src/runspace/`, so
   everything is imported as `runspace.*`. The distribution previously installed
   `contracts`, `protocols`, `workspace`, `ingestion`, `helpers` and
@@ -75,6 +85,17 @@ onward.
   metadata check, and runs the frontend parser tests.
 
 ### Fixed
+
+- The `claude_code` runtime fed the prompt and read the transcript through
+  `communicate()`; it now pumps stdin and stderr concurrently and reads
+  stdout line by line, so a prompt larger than the pipe buffer cannot
+  deadlock against a child that has already started writing. A hung CLI is
+  still killed at `RUNSPACE_CLI_TIMEOUT`, and any tool calls seen before the
+  kill are reported alongside the timeout message.
+- Rendered blocks (`{"$mcpui": N}` placeholders) are scoped to the turn
+  that registered them. They lived in a list shared by the whole process,
+  so two turns rendering at once could hand one reader the other's blocks —
+  or none, leaving the placeholder in the reply.
 
 - The distribution declared a dependency on `agentino`, which on PyPI is an
   unrelated project. Neither package is published to PyPI; install is from git. The agent runtime is now the `[agentino]` extra, pulling
