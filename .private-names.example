@@ -1,0 +1,10 @@
+# Names that must never appear in this repository: private deployments, their
+# agents, their tools, their domains. One extended-regex pattern per line,
+# matched case-insensitively. `#` starts a comment.
+#
+# Copy to `.private-names` (git-ignored) and put the real names there. The
+# real list does not belong in a public repository — a blocklist that names
+# what it hides publishes it.
+acme-corp
+acme\.example
+widget_count

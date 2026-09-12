@@ -50,12 +50,30 @@ export function applyAliases<T extends Record<string, any>>(
   return obj as T
 }
 
-/** Same, mapped over an array of blocks. */
+/** A list of blocks a model wrapped in an object — `{cards: [...]}`,
+ *  `{items: [...]}` — is still a list of blocks. Unwrap it when the wrapper
+ *  carries nothing of its own: one key, holding an array of objects, and
+ *  none of the canonical keys the block reads. A `{title, value, items}`
+ *  stays as it is; it is a block, not a wrapper. */
+export function unwrapList(input: unknown, aliases: AliasTable): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const obj = input as Record<string, any>
+  const keys = Object.keys(obj)
+  if (keys.length !== 1) return input
+  if (keys[0] in aliases) return input
+  const inner = obj[keys[0]]
+  const isBlockList = Array.isArray(inner) && inner.length > 0
+    && inner.every(x => x && typeof x === 'object' && !Array.isArray(x))
+  return isBlockList ? inner : input
+}
+
+/** Same, mapped over an array of blocks (a wrapped array included). */
 export function applyAliasesAll<T extends Record<string, any>>(
   input: unknown,
   aliases: AliasTable,
 ): T[] {
-  const list = Array.isArray(input) ? input : [input]
+  const unwrapped = unwrapList(input, aliases)
+  const list = Array.isArray(unwrapped) ? unwrapped : [unwrapped]
   return list.map(item => applyAliases<T>(item, aliases))
 }
 

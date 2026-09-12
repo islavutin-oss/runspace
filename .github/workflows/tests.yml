@@ -95,6 +95,7 @@ jobs:
       - name: Frontend unit tests
         run: |
           node --experimental-strip-types workspace/frontend/shared/utils/loosePayload.test.mjs
+          node --experimental-strip-types workspace/frontend/shared/utils/normalizeBlock.test.mjs
           node --experimental-strip-types --test workspace/frontend/shared/utils/describeSchedule.test.mjs
           node --test workspace/frontend/shared/components/InlineForm.test.mjs
           node --test workspace/frontend/shared/components/InlineFile.test.mjs

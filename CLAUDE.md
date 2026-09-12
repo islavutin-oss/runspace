@@ -30,6 +30,10 @@ PYTHONPATH=src pytest src/runspace/contracts src/runspace/protocols \
     src/runspace/workspace/cli/tests scripts/tests -q
 node --experimental-strip-types workspace/frontend/shared/utils/loosePayload.test.mjs
 
+git config core.hooksPath .githooks   # once per clone: refuses commits naming private work
+cp .private-names.example .private-names  # the real names stay out of the repo
+python3 scripts/check_private_names.py   # what that hook runs, over everything tracked
+
 ruff check .            # must be clean
 ruff format --check .   # must be clean
 PYTHONPATH=src python -m runspace.protocols.sandbox_lint <dir>   # flag banned imports in agent tools

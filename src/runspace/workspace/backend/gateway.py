@@ -260,6 +260,12 @@ class WorkspaceGateway:
             gates_config = app_cfg.get("gates")
             response_filter_cfg = app_cfg.get("response_filter")
             max_turns = int(app_cfg.get("max_turns", 10))
+            raw_labels = app_cfg.get("tool_labels")
+            tool_labels = (
+                {str(k): str(v) for k, v in raw_labels.items() if v}
+                if isinstance(raw_labels, dict)
+                else {}
+            )
 
             gw.registry.register(
                 AgentApp(
@@ -270,6 +276,7 @@ class WorkspaceGateway:
                     color=app_cfg.get("color", "#6B7280"),
                     group=app_cfg.get("group", "default"),
                     suggestions=list(app_cfg.get("suggestions") or []),
+                    tool_labels=tool_labels,
                     type=app_cfg.get("type", "agentino"),
                     enabled=app_cfg.get("enabled", True),
                     soul_path=soul_path,
@@ -828,11 +835,12 @@ class WorkspaceGateway:
                         session_id,
                     ):
                         if event["type"] == "tool_call":
+                            # The registry has already attached the label.
                             self.activity.log(
                                 actor=body.resolved_app_id,
                                 actor_name=app.name,
                                 action="tool_call",
-                                detail=f"Called {event['name']}",
+                                detail=f"Called {event.get('label') or event['name']}",
                                 entity_type="tool",
                                 entity_id=event["name"],
                             )
@@ -1106,8 +1114,8 @@ class WorkspaceGateway:
         async def list_external_channels():
             """Return current `external_channels` bindings, enriched
             with the chat title pulled from the discovery file when
-            available (so the UI shows "Wine Habits" instead of a
-            raw chat_id like `-1003862790454`).
+            available, so the UI shows the group's name instead of a
+            raw chat_id like `-100...`.
             """
             from pathlib import Path as _P
 

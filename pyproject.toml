@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "runspace"
-version = "0.2.8"
+version = "0.2.13"
 description = "A workspace runtime for LLM agents: channels, scheduled routines, attachments and a UI, with the agent runtime swappable"
 readme = "README.md"
 license = "Apache-2.0"

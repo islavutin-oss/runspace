@@ -236,7 +236,8 @@ declare module '@runspace/ui/shared/components' {
   export interface ChatMessage {
     id: string; role: 'user' | 'bot'; text: string; time: string
     botId?: string; botName?: string; botAvatar?: string; botColor?: string
-    timestamp?: number; toolsUsed?: string[]; edited?: boolean; deleted?: boolean
+    timestamp?: number; toolsUsed?: string[]; toolLabels?: Record<string, string>
+    edited?: boolean; deleted?: boolean
     images?: string[]; attachments?: any[]
   }
 }

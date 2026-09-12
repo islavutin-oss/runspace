@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -91,10 +92,50 @@ def _build_prompt(registry: AppRegistry, app: AgentApp, message: str, session_id
     return "\n\n".join(parts)
 
 
-def _parse_claude_stream_json(stdout: str) -> tuple[str, list[str], list[str], dict]:
-    """Walk `claude -p --output-format stream-json` JSONL.
+_DISPATCHER_CALL = re.compile(r"(?:^|[\s;&|(])(?:\./)?tools\s+call\s+([A-Za-z0-9_.:-]+)")
 
-    Returns (final_text, tools_used, tool_outputs, meta).
+# The CLI's own refusal when a command falls outside `--allowedTools`. It comes
+# back as a `tool_result` with `is_error`, so it is indistinguishable from a
+# tool that ran and failed unless the text is read: one is a call the agent
+# made, the other is a call that never happened.
+_PERMISSION_REFUSED = re.compile(
+    r"requires approval|requested permissions|have(?:n't| not) granted", re.I
+)
+
+
+def _tool_display_name(block: dict, own_tools_only: bool = False) -> str:
+    """The name to show for a `tool_use` block.
+
+    Claude Code reports its own tools — `Bash`, `Read` — but an agent that
+    reaches its real tools through a shell dispatcher (`./tools call <name>`)
+    is calling `<name>`; that is what the reader should see, and what
+    `tools_used` should record.
+
+    With `own_tools_only` anything else is dropped (returns ""): once a
+    workspace has a dispatcher, the CLI's own tools are plumbing — the `ls`
+    before the call, the `Read` of a file the tool wrote — and a reader
+    shown "Bash, Bash, Bash, lookup_order, Bash" learns nothing from the
+    Bashes. Without a dispatcher the CLI's tools are all the agent has, so
+    they keep their names.
+    """
+    name = str(block.get("name") or "")
+    if name == "Bash":
+        inp = block.get("input")
+        command = inp.get("command") if isinstance(inp, dict) else None
+        if isinstance(command, str):
+            m = _DISPATCHER_CALL.search(command)
+            if m:
+                return m.group(1)
+    return "" if own_tools_only else name
+
+
+def _has_dispatcher(cwd: str) -> bool:
+    """Does this workspace reach its tools through `./tools`?"""
+    return (Path(cwd) / "tools").is_file()
+
+
+class _StreamState:
+    """Fold `claude -p --output-format stream-json` events as they arrive.
 
     Event shapes (from Claude Code SDK docs):
       - {"type": "system", "subtype": "init", ...}
@@ -102,13 +143,90 @@ def _parse_claude_stream_json(stdout: str) -> tuple[str, list[str], list[str], d
                                                        {"type":"tool_use","name":...}]}}
       - {"type": "user", "message": {"content": [{"type":"tool_result", ...}]}}
       - {"type": "result", "result": "...", "total_cost_usd": ..., "session_id": ...}
-    """
-    final_text = ""
-    tools_used: list[str] = []
-    tool_outputs: list[str] = []
-    meta: dict = {}
 
-    for line in stdout.splitlines():
+    `feed` returns the tool names a single event announced, so a streaming
+    caller can tell the reader what is running while the turn is still going
+    — the CLI emits each `tool_use` the moment it happens, and a turn that
+    calls tools for minutes is silent otherwise.
+    """
+
+    def __init__(self, own_tools_only: bool = False) -> None:
+        self.own_tools_only = own_tools_only
+        self.final_text = ""
+        self.tools_used: list[str] = []
+        self.tool_outputs: list[str] = []
+        self.meta: dict = {}
+        # tool_use id -> reported name, until the matching result arrives.
+        self._pending: dict[str, str] = {}
+        self.refused: list[str] = []
+
+    def feed(self, ev: dict) -> list[str]:
+        ev_type = ev.get("type", "")
+        if ev_type == "result":
+            res = ev.get("result")
+            if isinstance(res, str) and res:
+                self.final_text = res
+            if "total_cost_usd" in ev:
+                self.meta["cost_usd"] = ev["total_cost_usd"]
+            if "session_id" in ev:
+                self.meta["session_id"] = ev["session_id"]
+            return []
+
+        msg = ev.get("message") or {}
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            return []
+        announced: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type", "")
+            if btype == "tool_use":
+                name = _tool_display_name(block, self.own_tools_only)
+                if name:
+                    self.tools_used.append(name)
+                    announced.append(name)
+                    call_id = block.get("id")
+                    if isinstance(call_id, str):
+                        self._pending[call_id] = name
+            elif btype == "tool_result":
+                out = block.get("content")
+                if isinstance(out, list):
+                    out = " ".join(b.get("text", "") for b in out if isinstance(b, dict))
+                out = str(out) if out else ""
+                name = self._pending.pop(block.get("tool_use_id"), None)
+                if block.get("is_error") and _PERMISSION_REFUSED.search(out):
+                    # The gate refused it: the agent reached for a tool it is
+                    # not allowed and nothing ran. Reporting it as used tells
+                    # the reader the answer rests on a call that never
+                    # happened, and hands the refusal text to anything reading
+                    # tool output as evidence.
+                    if name and name in self.tools_used:
+                        self.tools_used.remove(name)
+                        self.refused.append(name)
+                    continue
+                if out:
+                    self.tool_outputs.append(out[:2000])
+            elif btype == "text" and not self.final_text:
+                # Fallback: latest assistant text — used only if no `result` event arrives.
+                txt = block.get("text", "")
+                if isinstance(txt, str) and txt:
+                    self.final_text = txt
+        return announced
+
+
+def _parse_claude_stream_json(stdout: str) -> tuple[str, list[str], list[str], dict]:
+    """Walk a complete stream-json transcript. Returns
+    (final_text, tools_used, tool_outputs, meta)."""
+    state = _StreamState()
+    for ev in _events_from_lines(stdout.splitlines()):
+        state.feed(ev)
+    return state.final_text, state.tools_used, state.tool_outputs, state.meta
+
+
+def _events_from_lines(lines) -> list[dict]:
+    events: list[dict] = []
+    for line in lines:
         line = line.strip()
         if not line:
             continue
@@ -116,56 +234,16 @@ def _parse_claude_stream_json(stdout: str) -> tuple[str, list[str], list[str], d
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(ev, dict):
-            continue
-        ev_type = ev.get("type", "")
-
-        if ev_type == "result":
-            res = ev.get("result")
-            if isinstance(res, str) and res:
-                final_text = res
-            if "total_cost_usd" in ev:
-                meta["cost_usd"] = ev["total_cost_usd"]
-            if "session_id" in ev:
-                meta["session_id"] = ev["session_id"]
-            continue
-
-        msg = ev.get("message") or {}
-        content = msg.get("content") if isinstance(msg, dict) else None
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            btype = block.get("type", "")
-            if btype == "tool_use":
-                name = block.get("name", "")
-                if name:
-                    tools_used.append(str(name))
-            elif btype == "tool_result":
-                out = block.get("content")
-                if isinstance(out, list):
-                    out = " ".join(b.get("text", "") for b in out if isinstance(b, dict))
-                if out:
-                    tool_outputs.append(str(out)[:2000])
-            elif btype == "text" and not final_text:
-                # Fallback: latest assistant text — used only if no `result` event arrives.
-                txt = block.get("text", "")
-                if isinstance(txt, str) and txt:
-                    final_text = txt
-    return final_text, tools_used, tool_outputs, meta
+        if isinstance(ev, dict):
+            events.append(ev)
+    return events
 
 
-async def _run_claude(
-    prompt: str,
-    cwd: str,
-    model: str | None,
-    permission_mode: str,
-    allowed_tools: list[str] | None = None,
-) -> tuple[str, str]:
-    binary = _resolve_bin()
+def _claude_args(
+    cwd: str, model: str | None, permission_mode: str, allowed_tools: list[str] | None
+) -> list[str]:
     args = [
-        binary,
+        _resolve_bin(),
         "-p",
         "--output-format",
         "stream-json",
@@ -180,27 +258,111 @@ async def _run_claude(
         args += ["--allowedTools", ",".join(allowed_tools)]
     if model:
         args += ["--model", model]
+    return args
 
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        cwd=cwd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(
-            proc.communicate(prompt.encode("utf-8")),
-            timeout=DEFAULT_TIMEOUT_S,
+
+class _ClaudeRun:
+    """One `claude -p` invocation, read as it writes.
+
+    `events()` yields each stream-json event when its line arrives rather
+    than after the process exits, so a caller can relay tool calls while the
+    turn is in flight. The whole run is bounded by `DEFAULT_TIMEOUT_S`; on
+    expiry the process is killed and `asyncio.TimeoutError` is raised from
+    the generator. `stderr` is available once the generator is exhausted.
+    """
+
+    def __init__(
+        self,
+        prompt: str,
+        cwd: str,
+        model: str | None,
+        permission_mode: str,
+        allowed_tools: list[str] | None = None,
+    ) -> None:
+        self.args = _claude_args(cwd, model, permission_mode, allowed_tools)
+        self.cwd = cwd
+        self.prompt = prompt
+        self.stderr = ""
+
+    async def events(self) -> AsyncIterator[dict]:
+        proc = await asyncio.create_subprocess_exec(
+            *self.args,
+            cwd=self.cwd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise
-    return out.decode("utf-8", errors="replace"), err.decode("utf-8", errors="replace")
+        # stdin and stderr are pumped in the background: a prompt larger than
+        # the pipe would block a plain write until the child read it, and a
+        # child that fills stderr would block on us reading stdout.
+        feed = asyncio.create_task(self._feed_stdin(proc))
+        drain = asyncio.create_task(proc.stderr.read())
+        deadline = asyncio.get_running_loop().time() + DEFAULT_TIMEOUT_S
+        try:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                if not line:
+                    break
+                for ev in _events_from_lines([line.decode("utf-8", errors="replace")]):
+                    yield ev
+            remaining = max(deadline - asyncio.get_running_loop().time(), 0.0)
+            await asyncio.wait_for(proc.wait(), timeout=remaining)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+        finally:
+            # Settle the pumps rather than cancel them: with the child gone
+            # both finish at once, and a feed that never got scheduled
+            # (short stub output) must still close stdin.
+            try:
+                await asyncio.wait_for(feed, timeout=5)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                feed.cancel()
+            try:
+                err = await drain
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — the pipe is gone with the process
+                err = b""
+            self.stderr = err.decode("utf-8", errors="replace")
+
+    async def _feed_stdin(self, proc) -> None:
+        try:
+            proc.stdin.write(self.prompt.encode("utf-8"))
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            proc.stdin.close()
 
 
-async def chat(registry: AppRegistry, app: AgentApp, message: str, session_id: str) -> dict:
+async def _run_claude(
+    prompt: str,
+    cwd: str,
+    model: str | None,
+    permission_mode: str,
+    allowed_tools: list[str] | None = None,
+) -> tuple[str, str]:
+    """Run to completion; returns (stdout, stderr). Kept for callers that
+    want the raw transcript rather than events."""
+    run = _ClaudeRun(prompt, cwd, model, permission_mode, allowed_tools)
+    lines = [json.dumps(ev) async for ev in run.events()]
+    return "\n".join(lines) + ("\n" if lines else ""), run.stderr
+
+
+async def _turn(
+    registry: AppRegistry, app: AgentApp, message: str, session_id: str
+) -> AsyncIterator[dict]:
+    """The shared turn: announce tool calls as they happen, then the reply.
+
+    Yields `{"type": "tool_call", "name": ...}` per tool the CLI starts and
+    one final `{"type": "response", ...}`. History is written here so the
+    streaming and non-streaming entry points cannot drift.
+    """
     get_or_create_agent(registry, app)
 
     cwd = _resolve_cwd(app)
@@ -209,21 +371,23 @@ async def chat(registry: AppRegistry, app: AgentApp, message: str, session_id: s
     prompt = _build_prompt(registry, app, message, session_id)
 
     registry._add_to_history(session_id, "user", message)
+    state = _StreamState(own_tools_only=_has_dispatcher(cwd))
     text = ""
-    tools_used: list[str] = []
-    tool_outputs: list[str] = []
     try:
-        stdout, stderr = await _run_claude(prompt, cwd, app.model, permission_mode, allowed_tools)
-        text, tools_used, tool_outputs, meta = _parse_claude_stream_json(stdout)
+        run = _ClaudeRun(prompt, cwd, app.model, permission_mode, allowed_tools)
+        async for ev in run.events():
+            for name in state.feed(ev):
+                yield {"type": "tool_call", "name": name}
+        text = state.final_text
         if not text:
-            log.warning("[claude_code] no result/text event; stderr=%s", stderr.strip()[:500])
-            text = f"[claude_code] runtime returned no reply. stderr: {stderr.strip()[:500]}"
-        elif meta.get("cost_usd") is not None:
+            log.warning("[claude_code] no result/text event; stderr=%s", run.stderr.strip()[:500])
+            text = f"[claude_code] runtime returned no reply. stderr: {run.stderr.strip()[:500]}"
+        elif state.meta.get("cost_usd") is not None:
             log.info(
                 "[claude_code] app=%s cost=$%.4f tools=%d",
                 app.id,
-                meta["cost_usd"],
-                len(tools_used),
+                state.meta["cost_usd"],
+                len(state.tools_used),
             )
     except asyncio.TimeoutError:
         text = f"[claude_code] timed out after {DEFAULT_TIMEOUT_S:.0f}s"
@@ -232,17 +396,37 @@ async def chat(registry: AppRegistry, app: AgentApp, message: str, session_id: s
         text = f"[claude_code] binary not found: {e}"
         log.error("[claude_code] binary missing — set CLAUDE_CODE_BIN or install `claude` CLI")
 
+    if state.refused:
+        # A warning, not an info line: an agent reaching for tools it is not
+        # allowed is either a gate too tight for the work or a SOUL promising
+        # what the configuration does not grant, and both are misconfiguration
+        # an operator should see. Deployments commonly leave their loggers at
+        # WARNING, where an info line is never printed at all.
+        log.warning(
+            "[claude_code] app=%s reached for tools it is not allowed: %s",
+            app.id,
+            ", ".join(sorted(set(state.refused))),
+        )
+
     registry._add_to_history(session_id, "assistant", text)
-    return {"text": text, "tools_used": tools_used, "tool_outputs": tool_outputs}
+    yield {
+        "type": "response",
+        "text": text,
+        "tools_used": state.tools_used,
+        "tool_outputs": state.tool_outputs,
+    }
+
+
+async def chat(registry: AppRegistry, app: AgentApp, message: str, session_id: str) -> dict:
+    result: dict = {"text": "", "tools_used": [], "tool_outputs": []}
+    async for ev in _turn(registry, app, message, session_id):
+        if ev["type"] == "response":
+            result = {k: ev[k] for k in ("text", "tools_used", "tool_outputs")}
+    return result
 
 
 async def stream(
     registry: AppRegistry, app: AgentApp, message: str, session_id: str
 ) -> AsyncIterator[dict]:
-    result = await chat(registry, app, message, session_id)
-    yield {
-        "type": "response",
-        "text": result["text"],
-        "tools_used": result.get("tools_used", []),
-        "tool_outputs": result.get("tool_outputs", []),
-    }
+    async for ev in _turn(registry, app, message, session_id):
+        yield ev

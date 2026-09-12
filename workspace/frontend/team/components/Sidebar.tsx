@@ -32,6 +32,8 @@ export interface AgentConfig {
   description?: string
   /** Opening questions for this agent's 1-1 view, from workspace.yml. */
   suggestions?: string[]
+  /** Tool name → what a reader sees for it (workspace.yml `tool_labels`). */
+  tool_labels?: Record<string, string>
   capabilities?: string[]
   messagesHandled?: number
   tasksCompleted?: number

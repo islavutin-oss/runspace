@@ -139,6 +139,7 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
                 botAvatar: m.sender_avatar || '',
                 botColor: m.sender_color || '',
                 toolsUsed: m.tools_used || [],
+                toolLabels: agents.find(a => a.id === m.sender_id)?.tool_labels,
               } : {}),
             }))
             setMessages(dbMessages)
@@ -187,6 +188,7 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
               botAvatar: m.sender_avatar || '',
               botColor: m.sender_color || '',
               toolsUsed: m.tools_used || [],
+              toolLabels: agents.find(a => a.id === m.sender_id)?.tool_labels,
             } : {}),
           }
           return [...prev, newMsg]
@@ -310,13 +312,13 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
 
     try {
       await chatStream(apiBase, agent, mention.cleanText || text, `${sessionRef.current}-${agent.id}`, {
-        onToolCall: (name) => setThinking(`${agent.name}: accessing ${name.replace(/_/g, ' ').replace(/^get /, '')}…`),
-        onResponse: (text, toolsUsed, atts) => {
+        onToolCall: (name, label) => setThinking(`${agent.name}: accessing ${label || name.replace(/_/g, ' ').replace(/^get /, '')}…`),
+        onResponse: (text, toolsUsed, atts, toolLabels) => {
           const rts = Date.now()
           const botMsg: ChatMessage = {
             id: (rts + 1).toString(), role: 'bot', timestamp: rts + 1,
             botId: agent.id, botName: agent.name, botAvatar: agent.avatar, botColor: agent.color,
-            text, time: now(), toolsUsed, attachments: atts,
+            text, time: now(), toolsUsed, toolLabels, attachments: atts,
           }
           setMessages(prev => [...prev, botMsg])
           persistMessage(botMsg)
@@ -357,13 +359,13 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
           setMessages(prev => prev.map(m => m.id === userMsgId ? { ...m, text: `🎤 "${text}"` } : m))
           setThinking('')
         },
-        onToolCall: (name) => setThinking(`${agent.name}: accessing ${name.replace(/_/g, ' ').replace(/^get /, '')}…`),
-        onResponse: (text, toolsUsed, atts) => {
+        onToolCall: (name, label) => setThinking(`${agent.name}: accessing ${label || name.replace(/_/g, ' ').replace(/^get /, '')}…`),
+        onResponse: (text, toolsUsed, atts, toolLabels) => {
           const rts = Date.now()
           const botMsg: ChatMessage = {
             id: (rts + 1).toString(), role: 'bot', timestamp: rts + 1,
             botId: agent.id, botName: agent.name, botAvatar: agent.avatar, botColor: agent.color,
-            text, time: now(), toolsUsed, attachments: atts,
+            text, time: now(), toolsUsed, toolLabels, attachments: atts,
           }
           setMessages(prev => [...prev, botMsg])
           persistMessage(botMsg)

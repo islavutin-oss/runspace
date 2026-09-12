@@ -73,6 +73,30 @@ t('insight: an array of blocks all normalise', () => {
 })
 
 // ── kpi ────────────────────────────────────────────────────────────────
+t('kpi: a {cards: [...]} wrapper is the list inside it', () => {
+  // Live red error 2026-09-11: 'KPI block needs "title" and "value" — got: cards'
+  const out = applyAliasesAll({ cards: [
+    { title: 'Orders', value: '91' }, { label: 'SKU', value: 106 },
+  ] }, KPI_ALIASES)
+  assert.equal(out.length, 2)
+  assert.equal(out[0].title, 'Orders')
+  assert.equal(out[1].title, 'SKU')
+})
+t('kpi: {items: [...]} unwraps too; the key does not matter', () => {
+  const out = applyAliasesAll({ items: [{ title: 'a', value: 1 }] }, KPI_ALIASES)
+  assert.equal(out.length, 1)
+  assert.equal(out[0].value, 1)
+})
+t('kpi: a single card with a list field is NOT a wrapper', () => {
+  const out = applyAliasesAll({ title: 'a', value: 1, items: [{ x: 1 }] }, KPI_ALIASES)
+  assert.equal(out.length, 1)
+  assert.equal(out[0].title, 'a')
+})
+t('kpi: a one-key object holding scalars stays a (broken) card', () => {
+  const out = applyAliasesAll({ cards: 'three' }, KPI_ALIASES)
+  assert.equal(out.length, 1)
+  assert.equal(out[0].title, undefined)
+})
 t('kpi: {label,value} normalises to the title KPICard reads', () => {
   // KPICard reads `title`. This assertion used to run the other way — asserting
   // `label` — so it passed while a block written `label:` rendered a blank card.

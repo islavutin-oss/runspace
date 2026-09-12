@@ -19,7 +19,25 @@ pip install -e ".[dev]"
 
 Run the tests and the linter:
 
+```
+
+Turn on the hooks once per clone:
+
 ```bash
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` refuses a commit that names private work — a client, an
+agent or one of its tools. This package is published to PyPI and written on
+machines that also hold private projects; both leaks found so far were in
+comments, where a scan for credentials finds nothing. `pytest` runs the same
+check over every tracked file, so `--no-verify` only postpones it.
+
+The names themselves are not in this repository — a blocklist that spells out
+what it hides publishes it. Copy `.private-names.example` to `.private-names`
+(git-ignored) and put yours there, or point `$RUNSPACE_PRIVATE_NAMES` at a
+list you keep elsewhere. Without one, the generic rules still run.
+bash
 PYTHONPATH=src pytest -q
 ruff check .
 ruff format --check .
