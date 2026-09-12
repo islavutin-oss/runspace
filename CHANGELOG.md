@@ -7,6 +7,16 @@ onward.
 
 ## [Unreleased]
 
+### Added
+
+- `models:` on an app: caller role → model, falling back to `model`. A shared
+  demo seat and the owner are not worth the same spend — the demo carries the
+  bulk of the traffic and the easy questions — but the model came from
+  `app.model` alone, so every turn cost the same regardless of who asked. The
+  host labels the turn by setting `claude_code.caller_role`; runspace never
+  learns what an account is. Unset, or a role nobody mapped, keeps the app's
+  default model, so existing deployments are unchanged.
+
 ### Fixed
 
 - A tool call the CLI refused is no longer reported as a tool the agent used.

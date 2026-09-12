@@ -78,6 +78,19 @@ class AgentApp:
     # activity log keep the name as the identifier.
     tool_labels: dict[str, str] = field(default_factory=dict)
 
+    # Model per caller role (workspace.yml `models:`), falling back to `model`.
+    # A shared demo account and the owner are not worth the same spend: the
+    # demo carries the bulk of the traffic and asks the easy questions, while
+    # the owner's turns are the ones that justify a frontier model. The host
+    # says which role is calling — runspace does not know what an account is.
+    models: dict[str, str] = field(default_factory=dict)
+
+    def model_for(self, role: str | None = None) -> str | None:
+        """The model this turn should use. Unknown role -> the default."""
+        if role and self.models:
+            return self.models.get(role) or self.model
+        return self.model
+
     # HTTP/webhook type
     endpoint: str | None = None
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -19,6 +20,18 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = float(os.environ.get("RUNSPACE_CLI_TIMEOUT", "120"))
 CLAUDE_BIN_ENV = "CLAUDE_CODE_BIN"
+
+# Who is asking, for `models:` selection. A host that distinguishes callers
+# (an owner from a shared demo seat) sets this per request; runspace never
+# learns what an account is, only that turns can be labelled.
+#
+#     from runspace.workspace.backend.runtimes.claude_code import caller_role
+#     token = caller_role.set("demo")
+#     try: ...
+#     finally: caller_role.reset(token)
+caller_role: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "runspace_caller_role", default=None
+)
 CLAUDE_BIN_DEFAULT = "claude"
 DEFAULT_PERMISSION_MODE = "plan"
 
@@ -374,7 +387,10 @@ async def _turn(
     state = _StreamState(own_tools_only=_has_dispatcher(cwd))
     text = ""
     try:
-        run = _ClaudeRun(prompt, cwd, app.model, permission_mode, allowed_tools)
+        model = app.model_for(caller_role.get())
+        if model != app.model:
+            log.info("[claude_code] app=%s role=%s model=%s", app.id, caller_role.get(), model)
+        run = _ClaudeRun(prompt, cwd, model, permission_mode, allowed_tools)
         async for ev in run.events():
             for name in state.feed(ev):
                 yield {"type": "tool_call", "name": name}

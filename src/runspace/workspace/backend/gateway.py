@@ -260,6 +260,12 @@ class WorkspaceGateway:
             gates_config = app_cfg.get("gates")
             response_filter_cfg = app_cfg.get("response_filter")
             max_turns = int(app_cfg.get("max_turns", 10))
+            raw_models = app_cfg.get("models")
+            models = (
+                {str(k): str(v) for k, v in raw_models.items() if v}
+                if isinstance(raw_models, dict)
+                else {}
+            )
             raw_labels = app_cfg.get("tool_labels")
             tool_labels = (
                 {str(k): str(v) for k, v in raw_labels.items() if v}
@@ -277,6 +283,7 @@ class WorkspaceGateway:
                     group=app_cfg.get("group", "default"),
                     suggestions=list(app_cfg.get("suggestions") or []),
                     tool_labels=tool_labels,
+                    models=models,
                     type=app_cfg.get("type", "agentino"),
                     enabled=app_cfg.get("enabled", True),
                     soul_path=soul_path,
