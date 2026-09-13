@@ -165,6 +165,26 @@ def _resolve_bin() -> str:
     return os.environ.get(CLAUDE_BIN_ENV) or shutil.which(CLAUDE_BIN_DEFAULT) or CLAUDE_BIN_DEFAULT
 
 
+def _resolve_timeout(app: AgentApp) -> float:
+    """Seconds this agent's turn may take: `cli_timeout_s`, else the global.
+
+    A chat turn should give up quickly; a routine that calls four tools and
+    writes a thousand words needs minutes. One global value serves neither.
+    Non-positive values are ignored — nothing means "give up immediately".
+    """
+    raw = (app.gates_config or {}).get("cli_timeout_s")
+    if raw is not None:
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError):
+            log.warning("[claude_code] app=%s ignoring cli_timeout_s=%r: not a number", app.id, raw)
+        else:
+            if seconds > 0:
+                return seconds
+            log.warning("[claude_code] app=%s ignoring cli_timeout_s=%r: not positive", app.id, raw)
+    return DEFAULT_TIMEOUT_S
+
+
 def _resolve_permission_mode(app: AgentApp) -> str:
     cfg = app.gates_config or {}
     mode = cfg.get("cli_permission_mode")
@@ -444,10 +464,12 @@ class _ClaudeRun:
         model: str | None,
         permission_mode: str,
         allowed_tools: list[str] | None = None,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
     ) -> None:
         self.args = _claude_args(cwd, model, permission_mode, allowed_tools)
         self.cwd = cwd
         self.prompt = prompt
+        self.timeout_s = timeout_s
         self.stderr = ""
 
     async def events(self) -> AsyncIterator[dict]:
@@ -463,7 +485,7 @@ class _ClaudeRun:
         # child that fills stderr would block on us reading stdout.
         feed = asyncio.create_task(self._feed_stdin(proc))
         drain = asyncio.create_task(proc.stderr.read())
-        deadline = asyncio.get_running_loop().time() + DEFAULT_TIMEOUT_S
+        deadline = asyncio.get_running_loop().time() + self.timeout_s
         try:
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
@@ -512,10 +534,11 @@ async def _run_claude(
     model: str | None,
     permission_mode: str,
     allowed_tools: list[str] | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> tuple[str, str]:
     """Run to completion; returns (stdout, stderr). Kept for callers that
     want the raw transcript rather than events."""
-    run = _ClaudeRun(prompt, cwd, model, permission_mode, allowed_tools)
+    run = _ClaudeRun(prompt, cwd, model, permission_mode, allowed_tools, timeout_s)
     lines = [json.dumps(ev) async for ev in run.events()]
     return "\n".join(lines) + ("\n" if lines else ""), run.stderr
 
@@ -544,7 +567,7 @@ async def _turn(
         model = app.model_for(caller_role.get())
         if model != app.model:
             log.info("[claude_code] app=%s role=%s model=%s", app.id, caller_role.get(), model)
-        run = _ClaudeRun(prompt, cwd, model, permission_mode, allowed_tools)
+        run = _ClaudeRun(prompt, cwd, model, permission_mode, allowed_tools, _resolve_timeout(app))
         async for ev in run.events():
             for name in state.feed(ev):
                 yield {"type": "tool_call", "name": name}

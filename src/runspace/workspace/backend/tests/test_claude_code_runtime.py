@@ -619,3 +619,47 @@ def test_the_refusal_text_is_not_offered_as_tool_output():
     for ev in cc_rt._events_from_lines(_refusal_transcript().splitlines()):
         state.feed(ev)
     assert not any("requires approval" in o for o in state.tool_outputs)
+
+
+# ── per-app timeout ─────────────────────────────────────────────────────────
+
+
+def test_the_timeout_defaults_to_the_global():
+    from runspace.workspace.backend.runtimes.claude_code import (
+        DEFAULT_TIMEOUT_S,
+        _resolve_timeout,
+    )
+
+    assert _resolve_timeout(_make_app()) == DEFAULT_TIMEOUT_S
+
+
+def test_an_app_can_ask_for_longer():
+    """A chat turn should give up quickly; a routine that calls four tools and
+    writes a thousand words needs minutes. One global value serves neither."""
+    from runspace.workspace.backend.runtimes.claude_code import _resolve_timeout
+
+    app = _make_app()
+    app.gates_config = {"cli_timeout_s": 600}
+    assert _resolve_timeout(app) == 600.0
+
+
+@pytest.mark.parametrize("bad", [0, -1, "", "soon", None, [], {}])
+def test_a_timeout_that_is_not_a_positive_number_is_ignored(bad):
+    """Nothing configures "give up immediately", so 0 and -1 are mistakes."""
+    from runspace.workspace.backend.runtimes.claude_code import (
+        DEFAULT_TIMEOUT_S,
+        _resolve_timeout,
+    )
+
+    app = _make_app()
+    app.gates_config = {"cli_timeout_s": bad}
+    assert _resolve_timeout(app) == DEFAULT_TIMEOUT_S
+
+
+def test_a_string_number_is_accepted():
+    """YAML hands back whatever it parsed; `"600"` means 600 seconds."""
+    from runspace.workspace.backend.runtimes.claude_code import _resolve_timeout
+
+    app = _make_app()
+    app.gates_config = {"cli_timeout_s": "600"}
+    assert _resolve_timeout(app) == 600.0
