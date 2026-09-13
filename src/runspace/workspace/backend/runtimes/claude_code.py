@@ -22,6 +22,11 @@ if TYPE_CHECKING:  # pragma: no cover
 log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = float(os.environ.get("RUNSPACE_CLI_TIMEOUT", "120"))
+
+# Per-line ceiling for the CLI's stream-json output. Generous because the line
+# is an event, and an event carrying a tool result is as large as that result;
+# bounded because a runaway process should not be able to exhaust memory.
+STREAM_LINE_LIMIT = int(os.environ.get("RUNSPACE_CLI_LINE_LIMIT", 16 * 1024 * 1024))
 CLAUDE_BIN_ENV = "CLAUDE_CODE_BIN"
 
 # Who is asking, for `models:` selection. A host that distinguishes callers
@@ -479,6 +484,12 @@ class _ClaudeRun:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # One stream-json event per line, and an event carrying a tool
+            # result is as large as the result. asyncio's reader defaults to
+            # 64 KiB and raises on a longer line, which killed the turn outright
+            # — no reply, not even the failure text — the first time a tool
+            # returned a few dozen benchmark runs.
+            limit=STREAM_LINE_LIMIT,
         )
         # stdin and stderr are pumped in the background: a prompt larger than
         # the pipe would block a plain write until the child read it, and a
@@ -491,7 +502,18 @@ class _ClaudeRun:
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     raise asyncio.TimeoutError
-                line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                except ValueError:
+                    # Still longer than the ceiling. Losing the turn is bad;
+                    # losing it with no reply at all is worse, so stop reading
+                    # and let the caller report what it has.
+                    log.warning(
+                        "[claude_code] cwd=%s a stream line exceeded %d bytes",
+                        self.cwd,
+                        STREAM_LINE_LIMIT,
+                    )
+                    break
                 if not line:
                     break
                 for ev in _events_from_lines([line.decode("utf-8", errors="replace")]):

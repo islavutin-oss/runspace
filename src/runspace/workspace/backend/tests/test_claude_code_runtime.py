@@ -663,3 +663,38 @@ def test_a_string_number_is_accepted():
     app = _make_app()
     app.gates_config = {"cli_timeout_s": "600"}
     assert _resolve_timeout(app) == 600.0
+
+
+# ── a large tool result must not kill the turn ──────────────────────────────
+
+
+def test_the_reader_is_given_a_limit_above_asyncios_default():
+    """One stream-json event per line, and an event carrying a tool result is as
+    large as that result. asyncio's reader defaults to 64 KiB and *raises* on a
+    longer line — which killed the turn outright, with no reply at all, the
+    first time a tool returned a few dozen benchmark runs."""
+    from runspace.workspace.backend.runtimes.claude_code import STREAM_LINE_LIMIT
+
+    assert STREAM_LINE_LIMIT > 64 * 1024
+
+
+def test_the_subprocess_is_created_with_that_limit():
+    import inspect
+
+    from runspace.workspace.backend.runtimes import claude_code
+
+    src = inspect.getsource(claude_code._ClaudeRun.events)
+    assert "limit=STREAM_LINE_LIMIT" in src, \
+        "the reader falls back to asyncio's 64 KiB default"
+
+
+def test_a_line_over_the_limit_ends_the_read_instead_of_raising():
+    """Losing the turn is bad; losing it with no reply at all is worse."""
+    import inspect
+
+    from runspace.workspace.backend.runtimes import claude_code
+
+    src = inspect.getsource(claude_code._ClaudeRun.events)
+    i = src.index("readline()")
+    assert "except ValueError" in src[max(0, i - 400):i + 400], \
+        "an over-long line still escapes as ValueError"

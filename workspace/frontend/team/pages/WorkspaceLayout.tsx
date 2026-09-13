@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, createContext, useContext } from 'rea
 import type { CSSProperties } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Sidebar, { type SidebarConfig, type AgentConfig } from '../components/Sidebar'
+import { groupAgents } from '../../shared/utils/agentGroups'
 export type { AgentConfig }
 import ResizeHandle from '../components/ResizeHandle'
 
@@ -36,12 +37,14 @@ interface WorkspaceConfig {
 interface WorkspaceLayoutProps {
   children: React.ReactNode
   apiBase?: string
-  agentGroupLabels?: { backoffice?: string; customer?: string }
+  /** Per-group sidebar labels, keyed by the group name in workspace.yml. */
+  agentGroupLabels?: Record<string, string>
   /** Groups to leave out of the sidebar. Use when a group already has a
    *  surface of its own — a customer-facing agent given a dedicated chat page
    *  does not also need a row in the team sidebar, where it reads as another
    *  colleague rather than the thing a visitor is meant to talk to. */
-  hideAgentGroups?: Array<'backoffice' | 'customer'>
+  /** Group names to omit from the sidebar entirely. */
+  hideAgentGroups?: string[]
 }
 
 export default function WorkspaceLayout({
@@ -103,9 +106,7 @@ export default function WorkspaceLayout({
   const realName = fullName || me?.first_name || me?.email?.split('@')[0] || ws?.user?.name || 'User'
   const realRole = (me as any)?.role || ws?.user?.role || 'Owner'
   const user = { name: realName, role: realRole.charAt(0).toUpperCase() + realRole.slice(1), email: me?.email }
-  const hidden = new Set(hideAgentGroups)
-  const backoffice = hidden.has('backoffice') ? [] : agents.filter(a => a.group === 'backoffice')
-  const customer = hidden.has('customer') ? [] : agents.filter(a => a.group === 'customer')
+  const agentGroups = groupAgents(agents, agentGroupLabels, hideAgentGroups)
 
   // RBAC: when role=staff, build a stripped-down sidebar (Bookings only,
   // no AI agents, no settings). Frontend route-guard below redirects
@@ -145,10 +146,7 @@ export default function WorkspaceLayout({
     channels: staff
       ? allChannels.filter(ch => STAFF_VISIBLE_PAGE_IDS.has(ch.id))
       : allChannels,
-    agentGroups: staff ? [] : [
-      ...(backoffice.length ? [{ label: agentGroupLabels.backoffice || 'AI Team', agents: backoffice }] : []),
-      ...(customer.length ? [{ label: agentGroupLabels.customer || 'Customer-Facing', agents: customer }] : []),
-    ],
+    agentGroups: staff ? [] : agentGroups,
     settingsLinks: staff
       ? []
       : [{ id: 'settings', label: 'Settings', icon: 'Settings', href: '/workspace/settings' }],
