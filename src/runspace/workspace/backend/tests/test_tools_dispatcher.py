@@ -338,3 +338,43 @@ def test_seeded_context_reaches_the_framework(monkeypatch):
         from agentino.core.context import get_context
 
         assert get_context("tenant_id") == "acme"
+
+
+# ── a tool-rendered chart must survive the process boundary ─────────────────
+
+
+def test_a_registered_block_is_spliced_before_printing():
+    """A tool returning a chart registers the real block and emits
+    `{"$mcpui": 0}` for the caller to splice. In-process that works — the block
+    is in a shared ContextVar. Across a process boundary it cannot, and every
+    tool-rendered chart reached the model as the placeholder."""
+    from runspace.workspace.backend._mcp_ui import begin_turn, register_block
+    from runspace.workspace.backend.runtimes.tools_cli import _restore_blocks
+
+    begin_turn()
+    real = '```chart\n{"type": "line", "data": [{"x": 1, "y": 2}]}\n```'
+    placeholder = register_block(real)
+    assert '"$mcpui"' in placeholder
+
+    out = _restore_blocks(f"Here is the sweep.\n{placeholder}\n")
+    assert '"$mcpui"' not in out, "the placeholder reached the caller"
+    assert '"type": "line"' in out
+
+
+def test_text_without_a_block_is_untouched():
+    from runspace.workspace.backend._mcp_ui import begin_turn
+    from runspace.workspace.backend.runtimes.tools_cli import _restore_blocks
+
+    begin_turn()
+    assert _restore_blocks("just a sentence") == "just a sentence"
+
+
+def test_restoring_never_loses_the_answer(monkeypatch):
+    """Formatting is worth less than the reply it decorates."""
+    from runspace.workspace.backend.runtimes import tools_cli
+
+    def boom(*a, **k):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr("runspace.workspace.backend._mcp_ui.restore_mcp_ui_blocks", boom)
+    assert tools_cli._restore_blocks("the answer") == "the answer"

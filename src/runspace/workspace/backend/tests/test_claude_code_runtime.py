@@ -684,8 +684,7 @@ def test_the_subprocess_is_created_with_that_limit():
     from runspace.workspace.backend.runtimes import claude_code
 
     src = inspect.getsource(claude_code._ClaudeRun.events)
-    assert "limit=STREAM_LINE_LIMIT" in src, \
-        "the reader falls back to asyncio's 64 KiB default"
+    assert "limit=STREAM_LINE_LIMIT" in src, "the reader falls back to asyncio's 64 KiB default"
 
 
 def test_a_line_over_the_limit_ends_the_read_instead_of_raising():
@@ -696,5 +695,6 @@ def test_a_line_over_the_limit_ends_the_read_instead_of_raising():
 
     src = inspect.getsource(claude_code._ClaudeRun.events)
     i = src.index("readline()")
-    assert "except ValueError" in src[max(0, i - 400):i + 400], \
+    assert "except ValueError" in src[max(0, i - 400) : i + 400], (
         "an over-long line still escapes as ValueError"
+    )

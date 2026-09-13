@@ -210,8 +210,32 @@ def _cmd_call(tools: dict, name: str, raw_args: str) -> int:
         return 1
 
     # A tool may return a result object rather than a string; both carry text.
-    print(result if isinstance(result, str) else getattr(result, "content", result))
+    text = result if isinstance(result, str) else getattr(result, "content", result)
+    print(_restore_blocks(text) if isinstance(text, str) else text)
     return 0
+
+
+def _restore_blocks(text: str) -> str:
+    """Splice this turn's canonical UI blocks into the output.
+
+    A tool that returns a chart registers the real block and emits a
+    placeholder — `{"$mcpui": 0}` — for the caller to splice. In-process that
+    works: the block sits in a ContextVar the caller shares. Across a process
+    boundary it cannot, and the caller receives a reference to something that
+    died with the subprocess: every tool-rendered chart reached the model as
+    `{"$mcpui": 0}`, and agents correctly reported they had no chart to show.
+
+    This process owns both halves, so it splices before printing.
+    """
+    try:
+        from .._mcp_ui import restore_mcp_ui_blocks
+    except ImportError:
+        return text
+    try:
+        return restore_mcp_ui_blocks(text)
+    except Exception as e:  # never lose the answer over its formatting
+        print(f"warning: could not restore UI blocks: {e}", file=sys.stderr)
+        return text
 
 
 def main(argv: list[str]) -> int:
