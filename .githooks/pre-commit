@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Refuse a commit that names private work.
+#
+# This repository is public and published to PyPI. The names of private
+# deployments, their agents and their tools do not belong in it — not in the
+# code, and not in a comment either, which is where both of the ones we found
+# had been sitting. See scripts/check_private_names.py.
+#
+# Install: git config core.hooksPath .githooks
+# Bypass:  git commit --no-verify   (for a name that genuinely belongs here,
+#          add it to SELF in the checker instead — a bypass leaves nothing
+#          behind for the next person)
+set -euo pipefail
+exec python3 "$(git rev-parse --show-toplevel)/scripts/check_private_names.py" --staged

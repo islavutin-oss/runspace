@@ -9,6 +9,46 @@ onward.
 
 ### Added
 
+- `models:` on an app: caller role → model, falling back to `model`. A shared
+  demo seat and the owner are not worth the same spend — the demo carries the
+  bulk of the traffic and the easy questions — but the model came from
+  `app.model` alone, so every turn cost the same regardless of who asked. The
+  host labels the turn by setting `claude_code.caller_role`; runspace never
+  learns what an account is. Unset, or a role nobody mapped, keeps the app's
+  default model, so existing deployments are unchanged.
+
+### Fixed
+
+- A tool call the CLI refused is no longer reported as a tool the agent used.
+  `claude_code` counted every `tool_use` block it saw; a call outside
+  `cli_allowed_tools` is refused *after* the model asks for it, coming back as
+  an error result, so the reply's "Used:" line named tools that never ran —
+  twelve of them in one observed turn — and the refusal text was collected as
+  tool output for anything reading it as evidence. A tool that ran and failed
+  still counts as used. Refusals are logged: an agent reaching past its gate
+  is either a gate too tight for the work or a SOUL promising what the
+  configuration does not. Logged as a warning, since a deployment with its
+  loggers at WARNING — the common case — would never print an info line.
+
+### Fixed
+
+- `tool_labels` reach an application that consumes `AppRegistry.chat_stream`
+  directly. Labelling was done in the gateway's stream driver, so a host that
+  wraps the registry's stream to add its own checks — a supported way to use
+  this — served unlabelled events, and the same workspace showed tool
+  identifiers on one deployment and readable names on another. The registry
+  labels every event it yields; the gateway reads the label rather than
+  resolving it a second time.
+
+### Added
+
+- `tool_labels` on an app in `workspace.yml`: tool name → the name a reader
+  should see. Tool names are written for the model (`run_sql`), and the chat
+  showed them verbatim while a turn ran and in the "Used:" line. The label
+  now rides on the streamed `tool_call` event (`label`) and the `response`
+  (`tool_labels`), and is in the app's entry in the apps list, so persisted
+  channel messages resolve it too. Events and the activity log keep the tool
+  name as the identifier.
 - A SQLite messaging backend, now the default. Channels, threads, direct
   messages and read state previously required `SUPABASE_URL` and
   `SUPABASE_KEY`: without them `MessagingService` was never constructed, every
@@ -45,6 +85,24 @@ onward.
 
 ### Changed
 
+- The `claude_code` runtime relays each tool call as it starts. It used to
+  wait for the CLI to exit and then emit one event, so a turn that ran tools
+  for minutes produced nothing on `/chat/stream` until it was over — and an
+  idle-timeout anywhere between the browser and the API cut the reply off
+  before it arrived. `stream()` now yields `{"type": "tool_call"}` per tool
+  the moment the CLI reports it, then the final `response`. `chat()` is
+  unchanged in shape and shares the same code path.
+- A `tool_use` of `Bash` that runs a shell dispatcher (`./tools call <name>`)
+  is reported as `<name>`, in both the streamed `tool_call` and `tools_used`.
+- In a workspace that has a `./tools` dispatcher, the `claude_code` runtime
+  reports only the calls that go through it. The CLI's own `Bash` and `Read`
+  are plumbing there — the `ls` before a call, the read of a file a tool
+  wrote — and a reader shown "Bash, Bash, Bash, lookup_order, Bash" learns
+  nothing from the Bashes. Without a dispatcher the CLI's tools are all the
+  agent has, so they keep their names.
+- The "Used:" line under a reply lists each tool once, in first-use order,
+  rather than the full call sequence.
+
 - **Breaking: one import root.** The packages moved under `src/runspace/`, so
   everything is imported as `runspace.*`. The distribution previously installed
   `contracts`, `protocols`, `workspace`, `ingestion`, `helpers` and
@@ -75,6 +133,22 @@ onward.
   metadata check, and runs the frontend parser tests.
 
 ### Fixed
+
+- A `kpi` block whose cards a model wrapped in an object — `{"cards": [...]}`,
+  `{"items": [...]}` — rendered as `KPI block needs "title" and "value" —
+  got: cards`. A one-key object holding a list of blocks is now read as that
+  list; the same unwrapping applies to every block that takes a list.
+
+- The `claude_code` runtime fed the prompt and read the transcript through
+  `communicate()`; it now pumps stdin and stderr concurrently and reads
+  stdout line by line, so a prompt larger than the pipe buffer cannot
+  deadlock against a child that has already started writing. A hung CLI is
+  still killed at `RUNSPACE_CLI_TIMEOUT`, and any tool calls seen before the
+  kill are reported alongside the timeout message.
+- Rendered blocks (`{"$mcpui": N}` placeholders) are scoped to the turn
+  that registered them. They lived in a list shared by the whole process,
+  so two turns rendering at once could hand one reader the other's blocks —
+  or none, leaving the placeholder in the reply.
 
 - The distribution declared a dependency on `agentino`, which on PyPI is an
   unrelated project. Neither package is published to PyPI; install is from git. The agent runtime is now the `[agentino]` extra, pulling

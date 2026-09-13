@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from unittest.mock import patch
 
 import pytest
 
 from runspace.workspace.backend.app_registry import AgentApp, AppRegistry
 from runspace.workspace.backend.runtimes import openclaw as rt
+from runspace.workspace.backend.runtimes._failure import failure_text
 
 
 @pytest.fixture(autouse=True)
@@ -119,13 +121,26 @@ def test_chat_returns_the_parsed_reply():
     assert out["tools_used"] == ["calc"]
 
 
-def test_a_failing_cli_surfaces_its_stderr_rather_than_an_empty_reply():
+def test_a_failing_cli_logs_its_stderr_and_tells_the_caller_nothing(caplog):
+    """This test used to assert the opposite.
+
+    Surfacing stderr looked like helpfulness — an empty reply tells a caller
+    nothing. But the reply is delivered into the channel, so on a public
+    workspace the CLI's own diagnostics became the agent's answer: absolute
+    paths, profile and model names, whatever the binary printed. The operator
+    still needs it, so it goes to the log and the caller gets a sentence.
+    """
+
     async def fake_exec(*args, **kwargs):
         return _StubProc(stdout=b"", stderr=b"openclaw: profile not found", returncode=1)
 
-    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
-        out = asyncio.run(rt.chat(AppRegistry(tenant_id="acme"), _app(), "hello", "s1"))
-    assert "profile not found" in out["text"]
+    with caplog.at_level(logging.WARNING):
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            out = asyncio.run(rt.chat(AppRegistry(tenant_id="acme"), _app(), "hello", "s1"))
+
+    assert out["text"] == failure_text("empty")
+    assert "profile not found" not in out["text"]
+    assert "profile not found" in caplog.text, "the operator lost the diagnosis"
 
 
 def test_the_registry_dispatches_openclaw_apps_to_this_adapter():

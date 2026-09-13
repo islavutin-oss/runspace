@@ -89,6 +89,8 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
     return saved ? Math.max(280, Math.min(600, Number(saved))) : 320
   })
   const scrollRef = useRef<HTMLDivElement>(null)
+  // The server decides; this only avoids offering a control that would 403.
+  const [canPost, setCanPost] = useState(true)
   const sessionRef = useRef(`${channel}-${Date.now()}`)
   const demoLoaded = useRef(false)
 
@@ -139,6 +141,7 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
                 botAvatar: m.sender_avatar || '',
                 botColor: m.sender_color || '',
                 toolsUsed: m.tools_used || [],
+                toolLabels: agents.find(a => a.id === m.sender_id)?.tool_labels,
               } : {}),
             }))
             setMessages(dbMessages)
@@ -158,6 +161,22 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
       } catch {}
     })()
   }, [apiBase, messages.length])
+
+  // Whether this caller may write here. Fetched on its own rather than off the
+  // fallback path above, which only runs when the channel has no messages.
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${apiBase}/config`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(cfg => {
+        if (cancelled || !cfg) return
+        const here = (cfg.channels || []).find((c: any) => c.id === channel)
+        // Absent means an older server that does not gate channels: open.
+        if (here && here.can_post === false) setCanPost(false)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [apiBase, channel])
 
   // Supabase Realtime: listen for new messages from other users
   useEffect(() => {
@@ -187,6 +206,7 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
               botAvatar: m.sender_avatar || '',
               botColor: m.sender_color || '',
               toolsUsed: m.tools_used || [],
+              toolLabels: agents.find(a => a.id === m.sender_id)?.tool_labels,
             } : {}),
           }
           return [...prev, newMsg]
@@ -310,13 +330,13 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
 
     try {
       await chatStream(apiBase, agent, mention.cleanText || text, `${sessionRef.current}-${agent.id}`, {
-        onToolCall: (name) => setThinking(`${agent.name}: accessing ${name.replace(/_/g, ' ').replace(/^get /, '')}…`),
-        onResponse: (text, toolsUsed, atts) => {
+        onToolCall: (name, label) => setThinking(`${agent.name}: accessing ${label || name.replace(/_/g, ' ').replace(/^get /, '')}…`),
+        onResponse: (text, toolsUsed, atts, toolLabels) => {
           const rts = Date.now()
           const botMsg: ChatMessage = {
             id: (rts + 1).toString(), role: 'bot', timestamp: rts + 1,
             botId: agent.id, botName: agent.name, botAvatar: agent.avatar, botColor: agent.color,
-            text, time: now(), toolsUsed, attachments: atts,
+            text, time: now(), toolsUsed, toolLabels, attachments: atts,
           }
           setMessages(prev => [...prev, botMsg])
           persistMessage(botMsg)
@@ -357,13 +377,13 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
           setMessages(prev => prev.map(m => m.id === userMsgId ? { ...m, text: `🎤 "${text}"` } : m))
           setThinking('')
         },
-        onToolCall: (name) => setThinking(`${agent.name}: accessing ${name.replace(/_/g, ' ').replace(/^get /, '')}…`),
-        onResponse: (text, toolsUsed, atts) => {
+        onToolCall: (name, label) => setThinking(`${agent.name}: accessing ${label || name.replace(/_/g, ' ').replace(/^get /, '')}…`),
+        onResponse: (text, toolsUsed, atts, toolLabels) => {
           const rts = Date.now()
           const botMsg: ChatMessage = {
             id: (rts + 1).toString(), role: 'bot', timestamp: rts + 1,
             botId: agent.id, botName: agent.name, botAvatar: agent.avatar, botColor: agent.color,
-            text, time: now(), toolsUsed, attachments: atts,
+            text, time: now(), toolsUsed, toolLabels, attachments: atts,
           }
           setMessages(prev => [...prev, botMsg])
           persistMessage(botMsg)
@@ -612,14 +632,20 @@ export default function GeneralChannel({ agents, apiBase = '/api/workspace', use
 
       {/* Input */}
       <div className="px-4 lg:px-5 pb-3 bg-white shrink-0">
-        <MessageComposer
-          placeholder={`Message #${channel} — tag @anyone…`}
-          agents={agents.map(a => ({ id: a.id, name: a.name, avatar: a.avatar, color: a.color }))}
-          users={users}
-          onSend={send}
-          onSendAudio={handleAudio}
-          draftKey={channel}
-        />
+        {canPost ? (
+          <MessageComposer
+            placeholder={`Message #${channel} — tag @anyone…`}
+            agents={agents.map(a => ({ id: a.id, name: a.name, avatar: a.avatar, color: a.color }))}
+            users={users}
+            onSend={send}
+            onSendAudio={handleAudio}
+            draftKey={channel}
+          />
+        ) : (
+          <p className="text-center text-xs text-gray-500 py-2">
+            #{channel} is read-only here. Message any desk directly to ask something.
+          </p>
+        )}
       </div>
     </div>
 

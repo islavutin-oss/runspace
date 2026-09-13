@@ -42,6 +42,14 @@ def _sanitize_name(name: str) -> str:
     base = Path(name).name  # drop any directory components
     base = base.replace(" ", "_")
     base = re.sub(r"[^A-Za-z0-9._-]", "_", base)
+    # `Path("..").name` is ".." — a name made only of dots survives everything
+    # above, so an upload called ".." produced a file_id containing "..". It
+    # was one path component and did not escape anything on its own, but a
+    # readable suffix is not worth carrying a traversal sequence into an id
+    # that gets joined into paths, logged, and handed to other layers. Collapse
+    # runs of dots, then drop them from the ends; a name left with nothing is
+    # the anonymous case the fallback already covered.
+    base = re.sub(r"\.{2,}", ".", base).strip(".")
     return base[:80] or "file"
 
 

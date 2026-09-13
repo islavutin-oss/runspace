@@ -70,6 +70,27 @@ class AgentApp:
     # pricing questions on the catalogue desk sends people to the wrong agent.
     suggestions: list[str] = field(default_factory=list)
 
+    # Reader-facing names for the agent's tools (workspace.yml `tool_labels:`,
+    # tool name → label). Tool names are written for the model — `run_sql`,
+    # `top_sellers` — and the chat shows them while a turn runs and in the
+    # "Used:" line under the reply. A label is what a person should read
+    # there instead; unlabelled tools show their name. Events and the
+    # activity log keep the name as the identifier.
+    tool_labels: dict[str, str] = field(default_factory=dict)
+
+    # Model per caller role (workspace.yml `models:`), falling back to `model`.
+    # A shared demo account and the owner are not worth the same spend: the
+    # demo carries the bulk of the traffic and asks the easy questions, while
+    # the owner's turns are the ones that justify a frontier model. The host
+    # says which role is calling — runspace does not know what an account is.
+    models: dict[str, str] = field(default_factory=dict)
+
+    def model_for(self, role: str | None = None) -> str | None:
+        """The model this turn should use. Unknown role -> the default."""
+        if role and self.models:
+            return self.models.get(role) or self.model
+        return self.model
+
     # HTTP/webhook type
     endpoint: str | None = None
 
@@ -92,6 +113,7 @@ class AgentApp:
             "type": self.type,
             "enabled": self.enabled,
             "suggestions": self.suggestions,
+            "tool_labels": self.tool_labels,
         }
 
 
@@ -283,6 +305,29 @@ class AppRegistry:
         else:
             raise ValueError(f"Unknown app type: {app.type}")
 
+    @staticmethod
+    def _labelled(app: AgentApp, event: dict) -> dict:
+        """Carry the app's reader-facing tool names on a streamed event.
+
+        This belongs here rather than in the gateway's stream driver. Wrapping
+        `chat_stream` directly is a supported way to use this — an application
+        adds its own guards around the events and serves them itself — and
+        those consumers were getting unlabelled events while the gateway's own
+        route got labelled ones, so the same workspace showed tool identifiers
+        on one deployment and readable names on another.
+        """
+        labels = app.tool_labels
+        if not labels:
+            return event
+        if event.get("type") == "tool_call":
+            label = labels.get(event.get("name"))
+            return {**event, "label": label} if label else event
+        if event.get("type") == "response":
+            found = {t: labels[t] for t in (event.get("tools_used") or []) if t in labels}
+            if found:
+                return {**event, "tool_labels": found}
+        return event
+
     async def chat_stream(self, app_id: str, message: str, session_id: str) -> AsyncIterator[dict]:
         """Streaming chat — yields {type: tool_call/response} events."""
         app = self.apps.get(app_id)
@@ -293,35 +338,38 @@ class AppRegistry:
             from .runtimes import agentino as _agentino_rt
 
             async for event in _agentino_rt.stream(self, app, message, session_id):
-                yield event
+                yield self._labelled(app, event)
         elif app.type == "codex":
             from .runtimes import codex as _codex_rt
 
             async for event in _codex_rt.stream(self, app, message, session_id):
-                yield event
+                yield self._labelled(app, event)
         elif app.type == "claude_code":
             from .runtimes import claude_code as _cc_rt
 
             async for event in _cc_rt.stream(self, app, message, session_id):
-                yield event
+                yield self._labelled(app, event)
         elif app.type == "openclaw":
             from .runtimes import openclaw as _oc_rt
 
             async for event in _oc_rt.stream(self, app, message, session_id):
-                yield event
+                yield self._labelled(app, event)
         elif app.type == "pi":
             from .runtimes import pi as _pi_rt
 
             async for event in _pi_rt.stream(self, app, message, session_id):
-                yield event
+                yield self._labelled(app, event)
         else:
             # Non-streaming fallback
             result = await self.chat(app_id, message, session_id)
-            yield {
-                "type": "response",
-                "text": result["text"],
-                "tools_used": result.get("tools_used", []),
-            }
+            yield self._labelled(
+                app,
+                {
+                    "type": "response",
+                    "text": result["text"],
+                    "tools_used": result.get("tools_used", []),
+                },
+            )
 
     def _maybe_record_tool_usage(
         self, app_id: str, session_id: str, result: dict, t0: float, time_mod

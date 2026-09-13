@@ -31,3 +31,7 @@ vscode-extension/
 .ruff_cache/
 .hypothesis/
 .runspace/
+
+# Private names the pre-commit hook refuses. Deliberately untracked:
+# a blocklist that names what it hides publishes it.
+.private-names

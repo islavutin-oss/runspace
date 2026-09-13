@@ -174,13 +174,13 @@ export default function AgentChat({ agent, apiBase = '/api/workspace', userName:
 
     try {
       await chatStream(apiBase, agent, text, sessionRef.current, {
-        onToolCall: (name) => setThinking(`Accessing ${name.replace(/_/g, ' ').replace(/^get /, '')}…`),
-        onResponse: (replyText, toolsUsed, atts) => {
+        onToolCall: (name, label) => setThinking(`Accessing ${label || name.replace(/_/g, ' ').replace(/^get /, '')}…`),
+        onResponse: (replyText, toolsUsed, atts, toolLabels) => {
           const rts = Date.now()
           setMessages(prev => [...prev, {
             id: (rts + 1).toString(), role: 'bot', text: replyText, timestamp: rts + 1,
             botId: agent.id, botName: agent.name, botAvatar: agent.avatar, botColor: agent.color,
-            time: now(), toolsUsed, attachments: atts,
+            time: now(), toolsUsed, toolLabels, attachments: atts,
           }])
           if (!resolved) { outcome = { ok: true, reply: replyText }; resolved = true }
         },
@@ -253,13 +253,13 @@ export default function AgentChat({ agent, apiBase = '/api/workspace', userName:
           setMessages(prev => prev.map(m => m.id === userMsgId ? { ...m, text: `🎤 "${text}"` } : m))
           setThinking('')
         },
-        onToolCall: (name) => setThinking(`Accessing ${name.replace(/_/g, ' ').replace(/^get /, '')}…`),
-        onResponse: (text, toolsUsed, atts) => {
+        onToolCall: (name, label) => setThinking(`Accessing ${label || name.replace(/_/g, ' ').replace(/^get /, '')}…`),
+        onResponse: (text, toolsUsed, atts, toolLabels) => {
           const rts = Date.now()
           setMessages(prev => [...prev, {
             id: (rts + 1).toString(), role: 'bot', text, timestamp: rts + 1,
             botId: agent.id, botName: agent.name, botAvatar: agent.avatar, botColor: agent.color,
-            time: now(), toolsUsed, attachments: atts,
+            time: now(), toolsUsed, toolLabels, attachments: atts,
           }])
         },
         onError: (msg) => setMessages(prev => prev.map(m => m.id === userMsgId ? { ...m, text: `🎤 ${msg}` } : m)),

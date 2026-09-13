@@ -11,6 +11,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._failure import failure_text
+
 if TYPE_CHECKING:  # pragma: no cover
     from ..app_registry import AgentApp, AppRegistry
 
@@ -186,12 +188,12 @@ async def chat(registry: AppRegistry, app: AgentApp, message: str, session_id: s
         text, tools_used, tool_outputs = _parse_codex_jsonl(stdout)
         if not text:
             log.warning("[codex] no agent_message in JSONL; stderr=%s", stderr.strip()[:500])
-            text = f"[codex] runtime returned no agent_message. stderr: {stderr.strip()[:500]}"
+            text = failure_text("empty")
     except asyncio.TimeoutError:
-        text = f"[codex] timed out after {DEFAULT_TIMEOUT_S:.0f}s"
+        text = failure_text("timeout")
         log.warning("[codex] timeout for app=%s session=%s", app.id, session_id)
-    except FileNotFoundError as e:
-        text = f"[codex] binary not found: {e}"
+    except FileNotFoundError:
+        text = failure_text("unavailable")
         log.error("[codex] binary missing — set CODEX_BIN or install `codex` CLI")
 
     registry._add_to_history(session_id, "assistant", text)

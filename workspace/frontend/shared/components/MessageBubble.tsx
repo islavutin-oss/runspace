@@ -23,6 +23,7 @@ export interface ChatMessage {
   time: string
   timestamp?: number           // Date.now() — used for date dividers
   toolsUsed?: string[]
+  toolLabels?: Record<string, string>
   reactions?: { emoji: string; count: number; mine?: boolean }[]
   threadId?: string
   replyCount?: number
@@ -137,7 +138,7 @@ export default function MessageBubble({ message: msg, showHeader, userName = 'Yo
           </div>
         )}
 
-        {msg.toolsUsed && msg.toolsUsed.length > 0 && <ToolBadge tools={msg.toolsUsed} />}
+        {msg.toolsUsed && msg.toolsUsed.length > 0 && <ToolBadge tools={msg.toolsUsed} labels={msg.toolLabels} />}
 
         {editing ? (
           <div className="border border-amber-400 rounded-lg bg-amber-50/50 shadow-sm -mx-1">

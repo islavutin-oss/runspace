@@ -11,6 +11,8 @@ interface StreamAgent {
   name: string
   avatar: string
   color: string
+  /** tool name → reader-facing label (workspace.yml `tool_labels`). */
+  tool_labels?: Record<string, string>
 }
 
 interface StreamAttachment {
@@ -21,9 +23,10 @@ interface StreamAttachment {
 }
 
 interface StreamCallbacks {
-  onToolCall?: (name: string) => void
+  /** `label` is the reader-facing name when the app defined one. */
+  onToolCall?: (name: string, label?: string) => void
   onTranscription?: (text: string) => void
-  onResponse: (text: string, toolsUsed: string[], attachments?: any[]) => void
+  onResponse: (text: string, toolsUsed: string[], attachments?: any[], toolLabels?: Record<string, string>) => void
   onError: (message: string) => void
 }
 
@@ -170,7 +173,7 @@ export async function chatStream(
         const event = JSON.parse(line.slice(6))
         if (event.type === 'tool_call') {
           lastToolCallAt = Date.now()
-          callbacks.onToolCall?.(event.name)
+          callbacks.onToolCall?.(event.name, event.label || agent.tool_labels?.[event.name])
         } else if (event.type === 'transcription') {
           callbacks.onTranscription?.(event.text)
         } else if (event.type === 'response') {
@@ -180,7 +183,10 @@ export async function chatStream(
             await new Promise(r => setTimeout(r, 400 - elapsed))
           }
           gotResponse = true
-          callbacks.onResponse(event.text, event.tools_used || [], event.attachments)
+          callbacks.onResponse(
+            event.text, event.tools_used || [], event.attachments,
+            event.tool_labels || agent.tool_labels,
+          )
         }
       } catch {}
     }

@@ -11,6 +11,8 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._failure import failure_text
+
 if TYPE_CHECKING:  # pragma: no cover
     from ..app_registry import AgentApp, AppRegistry
 
@@ -246,12 +248,12 @@ async def chat(registry: AppRegistry, app: AgentApp, message: str, session_id: s
         text, tools_used, tool_outputs = _parse_pi_jsonl(stdout)
         if not text:
             log.warning("[pi] empty assistant text; stderr=%s", stderr.strip()[:500])
-            text = f"[pi] runtime returned no reply. stderr: {stderr.strip()[:500]}"
+            text = failure_text("empty")
     except asyncio.TimeoutError:
-        text = f"[pi] timed out after {DEFAULT_TIMEOUT_S:.0f}s"
+        text = failure_text("timeout")
         log.warning("[pi] timeout for app=%s session=%s", app.id, session_id)
-    except FileNotFoundError as e:
-        text = f"[pi] binary not found: {e}"
+    except FileNotFoundError:
+        text = failure_text("unavailable")
         log.error("[pi] binary missing — set PI_BIN or install `@earendil-works/pi-coding-agent`")
 
     registry._add_to_history(session_id, "assistant", text)

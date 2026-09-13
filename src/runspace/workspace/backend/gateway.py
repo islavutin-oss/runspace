@@ -21,6 +21,7 @@ from .attachments import (
     _ensure_attachments_referenced,
     _resolve_files,
 )
+from .caller import caller_role
 from .media import _build_transcriber, _resolve_env_vars
 from .models import (
     AttachmentInput,  # noqa: F401  re-exported for consumers
@@ -33,6 +34,43 @@ from .models import (
 # MessagingService imported lazily (requires supabase SDK)
 
 log = logging.getLogger(__name__)
+
+
+def _may_post(channel_cfg: dict | None, role: str | None) -> bool:
+    """Whether this caller's role may write to the channel.
+
+    A channel is a shared surface: one post is visible to everyone who opens
+    the workspace, and it persists. That is right for the people who run the
+    workspace and wrong for a public seat, where any visitor would be writing
+    into what the next visitor reads.
+
+    `post_roles:` on the channel names the roles allowed to write. Absent, the
+    channel is open, which is what every existing workspace expects.
+    """
+    allowed = (channel_cfg or {}).get("post_roles")
+    if not allowed:
+        return True
+    return role in {str(r) for r in allowed}
+
+
+def _app_workspace(base, app_cfg: dict) -> str:
+    """Where this agent's harness runs, defaulting to the workspace directory.
+
+    Sharing one directory is the normal case and stays the default. It stops
+    working when two agents own a tool of the same name: a shell dispatcher is
+    one file, the loader keeps the first definition it sees, and the second
+    agent silently runs someone else's tool. Declaring `workspace_path:` per
+    app gives them separate directories, and therefore separate dispatchers.
+
+    A relative path resolves against the workspace directory rather than the
+    process's working directory, which is not something a config author can
+    see or predict.
+    """
+    raw = app_cfg.get("workspace_path")
+    if not raw:
+        return str(base)
+    path = Path(str(raw))
+    return str(path if path.is_absolute() else base / path)
 
 
 class WorkspaceGateway:
@@ -260,6 +298,18 @@ class WorkspaceGateway:
             gates_config = app_cfg.get("gates")
             response_filter_cfg = app_cfg.get("response_filter")
             max_turns = int(app_cfg.get("max_turns", 10))
+            raw_models = app_cfg.get("models")
+            models = (
+                {str(k): str(v) for k, v in raw_models.items() if v}
+                if isinstance(raw_models, dict)
+                else {}
+            )
+            raw_labels = app_cfg.get("tool_labels")
+            tool_labels = (
+                {str(k): str(v) for k, v in raw_labels.items() if v}
+                if isinstance(raw_labels, dict)
+                else {}
+            )
 
             gw.registry.register(
                 AgentApp(
@@ -270,6 +320,8 @@ class WorkspaceGateway:
                     color=app_cfg.get("color", "#6B7280"),
                     group=app_cfg.get("group", "default"),
                     suggestions=list(app_cfg.get("suggestions") or []),
+                    tool_labels=tool_labels,
+                    models=models,
                     type=app_cfg.get("type", "agentino"),
                     enabled=app_cfg.get("enabled", True),
                     soul_path=soul_path,
@@ -282,7 +334,7 @@ class WorkspaceGateway:
                     gates_config=gates_config,
                     response_filter=response_filter_cfg,
                     max_turns=max_turns,
-                    workspace_path=str(base),
+                    workspace_path=_app_workspace(base, app_cfg),
                 )
             )
 
@@ -594,7 +646,12 @@ class WorkspaceGateway:
                 "brand_color": self._brand_color,
                 "sidebar_color": self._sidebar_color,
                 "apps": self.registry.list_apps(),
-                "channels": self._channels,
+                # `can_post` so the UI can drop the composer rather than
+                # offer a control that 403s. The server still decides; this is
+                # only what the client is told.
+                "channels": [
+                    {**c, "can_post": _may_post(c, caller_role.get())} for c in self._channels
+                ],
                 "settings_schema": self._settings_schema,
                 "suggestions": self._suggestions,
                 "user": {"name": self._user_name, "role": self._user_role},
@@ -828,11 +885,12 @@ class WorkspaceGateway:
                         session_id,
                     ):
                         if event["type"] == "tool_call":
+                            # The registry has already attached the label.
                             self.activity.log(
                                 actor=body.resolved_app_id,
                                 actor_name=app.name,
                                 action="tool_call",
-                                detail=f"Called {event['name']}",
+                                detail=f"Called {event.get('label') or event['name']}",
                                 entity_type="tool",
                                 entity_id=event["name"],
                             )
@@ -1106,8 +1164,8 @@ class WorkspaceGateway:
         async def list_external_channels():
             """Return current `external_channels` bindings, enriched
             with the chat title pulled from the discovery file when
-            available (so the UI shows "Wine Habits" instead of a
-            raw chat_id like `-1003862790454`).
+            available, so the UI shows the group's name instead of a
+            raw chat_id like `-100...`.
             """
             from pathlib import Path as _P
 
@@ -2055,6 +2113,12 @@ class WorkspaceGateway:
             channel = svc.get_channel_by_slug(slug)
             if not channel:
                 raise HTTPException(404, f"Channel '{slug}' not found")
+
+            # Enforced here rather than by hiding the composer: the endpoint is
+            # reachable without the UI.
+            cfg = next((c for c in self._channels if c.get("id") == slug), None)
+            if not _may_post(cfg, caller_role.get()):
+                raise HTTPException(403, "This channel is read-only for your account.")
 
             content = body.get("content", "")
             if not content:

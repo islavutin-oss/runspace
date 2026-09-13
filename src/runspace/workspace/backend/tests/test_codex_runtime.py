@@ -11,6 +11,7 @@ import pytest
 
 from runspace.workspace.backend.app_registry import AgentApp, AppRegistry
 from runspace.workspace.backend.runtimes import codex as codex_rt
+from runspace.workspace.backend.runtimes._failure import failure_text
 
 
 @pytest.fixture(autouse=True)
@@ -206,7 +207,7 @@ def test_timeout_returns_error_text_and_kills_process():
         with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
             result = asyncio.run(codex_rt.chat(reg, app, "hi", "s"))
 
-    assert "timed out" in result["text"]
+    assert result["text"] == failure_text("timeout")
     assert stub.killed is True
 
 
