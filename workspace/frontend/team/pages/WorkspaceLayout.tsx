@@ -113,6 +113,11 @@ export default function WorkspaceLayout({
   // any other /workspace/<page> to /workspace/bookings; backend
   // require_role guards the corresponding API surface.
   const staff = isStaffRole(realRole)
+  // Settings is shown to everyone: reading it is public and the screen is part
+  // of what the demo demonstrates. Writing is owner-only and refused by the
+  // API, so a visitor can look without being able to change anything.
+  const owner = (realRole || '').toLowerCase() === 'owner'
+    || (realRole || '').toLowerCase() === 'admin' 
 
   // ── Frontend route guard: redirect staff away from non-allowed pages
   const pathname = usePathname()

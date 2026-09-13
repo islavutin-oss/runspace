@@ -32,6 +32,17 @@ export interface ChartConfig {
   yKey: string
   color?: string
   y2Key?: string
+  /** Line: a third column shown beside each point and in the tooltip — the
+   *  load level behind it. The axes are the two measurements, so this is the
+   *  only place it can appear. */
+  pointLabelKey?: string
+  pointLabelPrefix?: string
+  /** Line: one point called out on the plot — the knee of a saturation curve.
+   *  The reading otherwise lives only in the prose under the chart, which is
+   *  the half a reader skips and a screenshot loses. */
+  markerX?: number
+  markerY?: number
+  markerLabel?: string
   y2Color?: string
   yFormat?: 'currency' | 'number' | 'percent'
   /** Symbol for `yFormat: 'currency'`. Defaults to '$'; set '€' for euro data. */

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { PanelRightOpen, PanelRightClose, Phone, Search, Bookmark, ArrowDown, RotateCcw } from 'lucide-react'
+import { PanelRightOpen, PanelRightClose, ArrowDown, RotateCcw } from 'lucide-react'
 import { MessageBubble, MessageComposer, TypingIndicator, WidgetIntentProvider, type ChatMessage } from '../../shared/components'
 import ThreadPanel from '../components/ThreadPanel'
 import DateDivider, { getDateKey } from '../../shared/components/DateDivider'
@@ -25,8 +25,13 @@ export default function AgentChat({ agent, apiBase = '/api/workspace', userName:
   const storageKey = userEmail ? `ws:dm:${agent.id}:${userEmail}:messages` : `ws:dm:${agent.id}:messages`
   const [messages, setMessages] = useLocalState<ChatMessage[]>(storageKey, initialMessages)
   const [typing, setTyping] = useState(false)
+  // Read inside fetchHistory, which must not re-create itself on every
+  // keystroke of a streaming reply.
+  const typingRef = useRef(false)
   const [thinking, setThinking] = useState('')
   const [threadId, setThreadId] = useState<string | null>(null)
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [clearing, setClearing] = useState(false)
   const threadStorageKey = userEmail ? `ws:dm:${agent.id}:${userEmail}:threads` : `ws:dm:${agent.id}:threads`
   const [threadReplies, setThreadReplies] = useLocalState<ChatMessage[]>(threadStorageKey, [])
   const [threadTyping, setThreadTyping] = useState(false)
@@ -75,25 +80,41 @@ export default function AgentChat({ agent, apiBase = '/api/workspace', userName:
             time: new Date(ts - (data.messages.length - i) * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             attachments: m.attachments,
           }))
-          // If local has more messages than server, something is in-flight — keep local.
-          if (prev.length > server.length) return prev
+          // The server is the record; the client is a view of it.
+          //
+          // This used to keep the local copy whenever it was longer, to protect
+          // a reply mid-stream. But it also meant the view could never shrink:
+          // a message deleted on the server stayed on screen through reloads,
+          // because local was still longer. Keep local only while something is
+          // actually streaming, which is what the guard was for.
+          if (typingRef.current && prev.length > server.length) return prev
           return server
         })
       })
       .catch(() => {})
   }, [agent.id, apiBase])
 
+  useEffect(() => { typingRef.current = typing }, [typing])
+
   // Initial load.
   useEffect(() => { fetchHistory() }, [fetchHistory])
 
   // Pending-reply poller: when the last message in local state is from
   // the user, the agent reply hasn't arrived (either it's still streaming
+  // Poll while the conversation is open, not only while a reply is pending.
+  //
+  // A run posts its own progress — renting the GPU, bringing the engine up,
+  // driving the load levels — and then the chart, minutes after the turn that
+  // started it has ended. Polling only when the last message was the user's
+  // meant every one of those arrived into a view that had stopped listening:
+  // the stages existed in the store and were never once displayed.
+  //
+  // fetchHistory keeps local state when local is longer than the server's, so
+  // a reply mid-stream is not clobbered by a poll landing on top of it.
   useEffect(() => {
-    const last = messages[messages.length - 1]
-    if (!last || last.role !== 'user' || typing) return  // typing = active SSE; no need to poll
     const id = setInterval(fetchHistory, 3000)
     return () => clearInterval(id)
-  }, [messages, typing, fetchHistory])
+  }, [fetchHistory])
 
   // Smart scroll
   useEffect(() => {
@@ -318,28 +339,77 @@ export default function AgentChat({ agent, apiBase = '/api/workspace', userName:
             <span className="w-2 h-2 rounded-full bg-green-400" />
             <span className="text-xs text-gray-400 hidden sm:inline">{agent.role}</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="relative flex items-center gap-1">
             <button
               type="button"
-              onClick={async () => {
-                if (!sessionRef.current) return
-                if (!window.confirm(`Reset conversation with ${agent.name}? This clears the chat history for this session — the agent will forget what you've said and start fresh.`)) return
-                try {
-                  await fetch(
-                    `${apiBase}/chat/history?app_id=${agent.id}&session_id=${encodeURIComponent(sessionRef.current)}`,
-                    { method: 'DELETE' }
-                  )
-                } catch { /* best-effort — clear UI anyway */ }
-                setMessages([])
-              }}
-              title="Reset conversation — agent forgets this thread"
-              className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700"
+              onClick={() => setConfirmClear(v => !v)}
+              title={`Clear conversation with ${agent.name}`}
+              aria-label={`Clear conversation with ${agent.name}`}
+              aria-expanded={confirmClear}
+              className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] transition-colors ${
+                confirmClear
+                  ? 'bg-gray-100 text-gray-700'
+                  : 'text-gray-400 hover:bg-gray-100 hover:text-gray-700'
+              }`}
             >
-              <RotateCcw className="h-4 w-4" />
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Clear</span>
             </button>
-            <button className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"><Phone className="h-4 w-4" /></button>
-            <button className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"><Search className="h-4 w-4" /></button>
-            <button className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"><Bookmark className="h-4 w-4" /></button>
+
+            {/* A confirm step, in the page rather than in a system dialog: a
+                native confirm() is unstyled, blocks the tab, and reads as the
+                browser interrupting rather than the product asking. */}
+            {confirmClear && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setConfirmClear(false)} />
+                <div
+                  role="dialog"
+                  aria-label="Clear this conversation"
+                  className="absolute right-0 top-full z-50 mt-1.5 w-[268px] rounded-lg border border-gray-200 bg-white p-3 shadow-lg"
+                >
+                  <p className="text-[13px] font-medium text-gray-900">
+                    Clear this conversation?
+                  </p>
+                  <p className="mt-1 text-[12px] leading-snug text-gray-500">
+                    {agent.name} forgets what was said here and starts fresh.
+                    Measurements and runs are not affected.
+                  </p>
+                  <div className="mt-3 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClear(false)}
+                      className="rounded-md px-2.5 py-1 text-[12px] text-gray-600 hover:bg-gray-100"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={clearing}
+                      onClick={async () => {
+                        if (!sessionRef.current) return
+                        setClearing(true)
+                        try {
+                          await fetch(
+                            `${apiBase}/chat/history?app_id=${agent.id}&session_id=${encodeURIComponent(sessionRef.current)}`,
+                            { method: 'DELETE' }
+                          )
+                        } catch { /* best-effort — clear the view anyway */ }
+                        setMessages([])
+                        setClearing(false)
+                        setConfirmClear(false)
+                      }}
+                      className="rounded-md bg-gray-900 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+                    >
+                      {clearing ? 'Clearing…' : 'Clear'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+            {/* Phone, Search and Bookmark sat here with no onClick: three
+                controls that did nothing, next to the one that does. A demo is
+                judged by whether its buttons work, so the header keeps only
+                what it can honour. */}
             <button onClick={() => setShowProfile(!showProfile)}
               className={`p-1.5 rounded transition-colors ${showProfile ? 'bg-blue-50 text-blue-600' : 'hover:bg-gray-100 text-gray-400'}`}>
               {showProfile ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}

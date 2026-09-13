@@ -272,10 +272,20 @@ def _build_prompt(registry: AppRegistry, app: AgentApp, message: str, session_id
             if content:
                 parts.append(f"[{role}]\n{content}")
 
+    # The caller's own name, not the workspace's static one.
+    #
+    # The agentino runtime reads request_user_name here; this one did not, so a
+    # CLI-run agent was told it was speaking to whoever workspace.yml names —
+    # "Guest" — however the caller had signed in. The agent therefore could not
+    # know it was talking to the owner, and addressed him in the third person
+    # no matter what its instructions said. The static name stays as the
+    # fallback for a turn with no request bound to it.
+    from ..app_registry import request_user_name
+
     envelope = build_message_envelope(
         message,
         company=registry.workspace_name.replace(" Back Office", "") or None,
-        user_name=registry._user_name or None,
+        user_name=request_user_name.get(None) or registry._user_name or None,
         user_role=registry._user_role or None,
     )
     parts.append("## Current request")
@@ -470,17 +480,37 @@ class _ClaudeRun:
         permission_mode: str,
         allowed_tools: list[str] | None = None,
         timeout_s: float = DEFAULT_TIMEOUT_S,
+        session_id: str = "",
     ) -> None:
         self.args = _claude_args(cwd, model, permission_mode, allowed_tools)
         self.cwd = cwd
         self.prompt = prompt
         self.timeout_s = timeout_s
+        self.session_id = session_id
         self.stderr = ""
 
     async def events(self) -> AsyncIterator[dict]:
+        # The verified caller role, carried into the child's environment.
+        #
+        # A CLI-run agent reaches its tools through a shell dispatcher, which
+        # is a separate process, and a ContextVar cannot cross that boundary —
+        # so a tool that gated on the caller saw nothing and failed closed for
+        # everyone, including the owner. The environment is per-process, so two
+        # turns running at once cannot see each other's role; a module global
+        # would let exactly that happen.
+        env = dict(os.environ)
+        env["RUNSPACE_CALLER_ROLE"] = caller_role.get() or ""
+        # The conversation this turn belongs to. A tool that starts work which
+        # reports back — a sweep posting its stages and its chart — needs to
+        # know where to post, and the session lives in a ContextVar the child
+        # process cannot see. Without it the posts went to the runtime's own
+        # internal session id and were never displayed anywhere.
+        env["RUNSPACE_SESSION_ID"] = self.session_id or ""
+
         proc = await asyncio.create_subprocess_exec(
             *self.args,
             cwd=self.cwd,
+            env=env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -589,7 +619,8 @@ async def _turn(
         model = app.model_for(caller_role.get())
         if model != app.model:
             log.info("[claude_code] app=%s role=%s model=%s", app.id, caller_role.get(), model)
-        run = _ClaudeRun(prompt, cwd, model, permission_mode, allowed_tools, _resolve_timeout(app))
+        run = _ClaudeRun(prompt, cwd, model, permission_mode, allowed_tools,
+                         _resolve_timeout(app), session_id=session_id)
         async for ev in run.events():
             for name in state.feed(ev):
                 yield {"type": "tool_call", "name": name}

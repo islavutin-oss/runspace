@@ -6,6 +6,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   ComposedChart, Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   Treemap, Sankey, ScatterChart, Scatter, ZAxis,
+  LabelList, Label, ReferenceDot,
 } from 'recharts'
 import { parseChartConfig, type ChartConfig } from './parseChartConfig'
 import { useWidgetIntent } from './widgetIntent'
@@ -121,7 +122,8 @@ export default function InlineChart({ json }: { json: string }) {
     return <pre className="text-xs text-red-500 bg-red-50 p-2 rounded">Invalid chart data: {error}</pre>
   }
 
-  const { type, title, data, xKey, yKey, color, y2Key, y2Color, yFormat } = config
+  const { type, title, data, xKey, yKey, color, y2Key, y2Color, yFormat,
+          pointLabelKey, pointLabelPrefix, markerX, markerY, markerLabel } = config
   const currencySymbol = config.currency || '$'
   // Deepest rank in a sankey, so terminal labels stay inside the box.
   const sankeyMaxDepth = (() => {
@@ -272,11 +274,59 @@ export default function InlineChart({ json }: { json: string }) {
         ) : type === 'line' ? (
           <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
-            <YAxis tickFormatter={tickFormatter} tick={{ fontSize: 11 }} width={60} />
-            <Tooltip formatter={(v: unknown) => formatValue(v, yFormat, currencySymbol)} />
-            <Line type="monotone" dataKey={yKey} stroke={mainColor} strokeWidth={2} dot={{ r: 3 }} />
+            {/* Axes carry their own name. Recharts labels an axis only when
+                told to — the dataKey names the tooltip — so without this the x
+                axis is a row of bare numbers: "2206" of what. */}
+            <XAxis dataKey={xKey} tick={{ fontSize: 11 }} height={46}>
+              <Label value={xKey} position="insideBottom" offset={-2}
+                     style={{ fontSize: 11, fill: '#6B7280' }} />
+            </XAxis>
+            <YAxis tickFormatter={tickFormatter} tick={{ fontSize: 11 }} width={72}>
+              <Label value={yKey} angle={-90} position="insideLeft"
+                     style={{ fontSize: 11, fill: '#6B7280', textAnchor: 'middle' }} />
+            </YAxis>
+            {/* Every value behind the point, each named. On a tradeoff curve
+                the two axes are the measurements and the load level is
+                neither, so the default tooltip omits the one number you act
+                on. */}
+            <Tooltip
+              cursor={{ strokeDasharray: '3 3' }}
+              content={({ active, payload }: any) => {
+                if (!active || !payload?.length) return null
+                const row = payload[0].payload || {}
+                const keys = [pointLabelKey, xKey, yKey, y2Key].filter(
+                  (k): k is string => !!k && row[k] !== undefined,
+                )
+                return (
+                  <div className="rounded-md border border-gray-200 bg-white px-2.5 py-2 shadow-sm">
+                    {keys.map((k) => (
+                      <div key={k} className="flex items-baseline gap-2 text-[11px] leading-5">
+                        <span className="text-gray-500">{k}</span>
+                        <span className="ml-auto font-medium tabular-nums text-gray-900">
+                          {k === pointLabelKey
+                            ? `${pointLabelPrefix || ''}${row[k]}`
+                            : formatValue(row[k], yFormat, currencySymbol)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              }}
+            />
+            <Line type="monotone" dataKey={yKey} stroke={mainColor} strokeWidth={2} dot={{ r: 3 }}>
+              {pointLabelKey && (
+                <LabelList dataKey={pointLabelKey} position="top" offset={8}
+                           style={{ fontSize: 10, fill: '#9CA3AF' }}
+                           formatter={(v: unknown) => `${pointLabelPrefix || ''}${v}`} />
+              )}
+            </Line>
             {y2Key && <Line type="monotone" dataKey={y2Key} stroke={secondColor} strokeWidth={2} dot={{ r: 3 }} />}
+            {markerX !== undefined && markerY !== undefined && (
+              <ReferenceDot x={markerX} y={markerY} r={5} fill="#DC2626"
+                            stroke="#fff" strokeWidth={1.5}
+                            label={{ value: markerLabel, position: 'top',
+                                     style: { fontSize: 10, fill: '#DC2626' } }} />
+            )}
             {(y2Key) && <Legend />}
           </LineChart>
         ) : type === 'area' ? (

@@ -203,6 +203,12 @@ def _cmd_call(tools: dict, name: str, raw_args: str) -> int:
         )
         return 1
 
+    # Before the tool runs, not after: asyncio.run gives the task a *copy* of
+    # the context, so a ContextVar first set inside the task is discarded when
+    # it ends. Installing the list out here means the copy references the same
+    # object, and the block the tool registered is still there to splice.
+    _begin_turn()
+
     try:
         result = asyncio.run(tool.execute(arguments))
     except Exception as e:  # the tool's own failure, reported as a failure
@@ -213,6 +219,16 @@ def _cmd_call(tools: dict, name: str, raw_args: str) -> int:
     text = result if isinstance(result, str) else getattr(result, "content", result)
     print(_restore_blocks(text) if isinstance(text, str) else text)
     return 0
+
+
+def _begin_turn() -> None:
+    """Install this turn's UI-block list before any tool can register one."""
+    try:
+        from .._mcp_ui import begin_turn
+
+        begin_turn()
+    except ImportError:
+        pass
 
 
 def _restore_blocks(text: str) -> str:
